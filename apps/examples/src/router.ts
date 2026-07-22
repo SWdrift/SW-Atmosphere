@@ -1,12 +1,12 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import WelcomeView from './views/WelcomeView.vue'
-import BasicSceneView from './views/BasicSceneView.vue'
+import WelcomeView from './pages/WelcomeView.vue'
+import WebgpuLightUp from './pages/webgpu-light-up/index.vue'
 
 export const examplePages = [
   {
-    path: '/basic-scene',
-    name: '基础场景',
-    component: BasicSceneView,
+    path: '/webgpu-light-up',
+    name: 'WebGPU 点亮测试',
+    component: WebgpuLightUp,
   },
 ] as const
 
