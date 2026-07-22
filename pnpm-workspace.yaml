@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "tools/*"
+allowBuilds:
+  '@parcel/watcher': true
+  '@vaadin/vaadin-usage-statistics': true
+  core-js: true
+  esbuild: true
+  sharp: true

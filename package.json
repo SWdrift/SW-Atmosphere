@@ -1,0 +1,9 @@
+{
+  "name": "sw-atmosphere",
+  "private": true,
+  "version": "0.0.0",
+  "devDependencies": {
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "~6.0.2"
+  }
+}

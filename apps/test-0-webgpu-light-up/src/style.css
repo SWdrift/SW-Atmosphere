@@ -1,0 +1,46 @@
+:root {
+  font-family: sans-serif;
+  color: #202122;
+  background: #fff;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 860px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  border-bottom: 1px solid #a2a9b1;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 28px;
+  font-weight: normal;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #a2a9b1;
+  background: #000;
+}
+
+pre {
+  padding: 12px;
+  border: 1px solid #a2a9b1;
+  background: #f8f9fa;
+  color: #202122;
+  font: 14px/1.5 monospace;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.error {
+  border-color: #d33;
+  color: #b32424;
+}
