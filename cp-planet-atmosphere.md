@@ -29,7 +29,7 @@
 - CPU/GPU 长度统一使用 km；UI 角度使用 degree，数学与 WGSL 使用 radian。
 - 世界空间固定为右手 Z-up 笛卡尔坐标：`+X` 右、`+Y` 前、`+Z` 上，行星中心为原点。
 - 相机局部基为 `+X` right、`+Y` forward、`+Z` up；`PlanetCamera` 单位四元数是最终渲染姿态的唯一真相。
-- Free 控制状态只保存世界参考 yaw/pitch 和独立 local-forward 滚转角；由受限 yaw/pitch 构造无滚转父基 `B₀`，最终基固定为 `B = B₀Rroll`。鼠标输入按当前 roll 旋回父控制平面后更新 yaw/pitch；世界 `±Z` 是 z1 极点，必须在更新控制角时把 pitch 限制为 ±89°，禁止先旋转越过 z1 再从 forward 事后反解或限幅。Q/E 只修改 `Rroll` 且不控制升降。Orbit 方位/仰角/半径和太阳世界方向保留独立状态。
+- Free 控制采用传统 Body/Look Rig：单位四元数 `qBody` 是人的身体局部坐标与局部天顶，Q/E 绕当前最终视线旋转整个 Body；`lookYaw/lookPitch` 是相对 Body 的观察角，鼠标只更新它们且 pitch 限制为 ±89°。最终姿态固定为 `qCamera = qBody × qYaw × qPitch`，不得把 roll 放在 Look 之后，也不得从最终姿态反解或修正控制状态。Orbit 方位/仰角/半径和太阳世界方向保留独立状态。
 - Free 的 WASD 速度状态保存为相机局部分量，每帧使用当前相机基转换为世界位移；姿态变化不得遗留旧世界方向的速度。
 - 真相无法构建时 fail fast，不用 `||`、`??` 或隐式默认值制造替代状态。
 

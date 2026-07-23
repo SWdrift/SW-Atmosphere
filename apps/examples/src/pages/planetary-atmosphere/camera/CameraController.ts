@@ -3,6 +3,7 @@ import {
   INITIAL_CAMERA_RADIAL,
   WORLD_UP,
 } from '../math/coordinates.ts'
+import type { Quaternion } from '../math/quaternion.ts'
 import {
   add,
   dot,
@@ -16,7 +17,7 @@ import {
 import {
   freeViewBasis,
   freeViewFromBasis,
-  rollFreeView,
+  rollFreeBody,
   rotateFreeView,
   type FreeView,
 } from './freeViewCoordinates.ts'
@@ -94,7 +95,9 @@ interface ViewProbeSnapshot {
   forward: Vec3
   right: Vec3
   up: Vec3
-  freeRollRadians: number
+  freeBodyOrientation: Quaternion
+  freeLookYawRadians: number
+  freeLookPitchRadians: number
   orbitAngles: OrbitAngles
 }
 
@@ -331,7 +334,7 @@ export class CameraController {
     }
 
     if (rollDeltaRadians !== 0) {
-      this.freeView = rollFreeView(this.freeView, rollDeltaRadians)
+      this.freeView = rollFreeBody(this.freeView, rollDeltaRadians)
       this.viewProbeInputBudgetRadians += Math.abs(rollDeltaRadians)
       this.lastViewProbeInput = {
         source: 'free-keyboard',
@@ -507,7 +510,9 @@ export class CameraController {
       forward: this.camera.forward,
       right: this.camera.right,
       up: this.camera.up,
-      freeRollRadians: this.freeView.rollRadians,
+      freeBodyOrientation: this.freeView.bodyOrientation,
+      freeLookYawRadians: this.freeView.yawRadians,
+      freeLookPitchRadians: this.freeView.pitchRadians,
       orbitAngles: { ...this.orbitAngles },
     }
     const previous = this.viewProbeSnapshot

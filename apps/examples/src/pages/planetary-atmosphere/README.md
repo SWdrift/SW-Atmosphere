@@ -17,7 +17,7 @@ pnpm --filter examples test
 
 ## 操作
 
-- Free flight：点击 canvas 进入 Pointer Lock；鼠标水平绕最终 camera local up、垂直绕最终 camera local right，`Q/E` 独立修改 local-forward 滚转且不控制升降。无滚转观察基以世界 `+Z` 为参考，pitch 在极点前限制为 ±89°；鼠标改变观察方向后重新构造该父级并施加原滚转，因此偏转角保持锁定。`W/S` 沿 local forward、`A/D` 沿 local right。`Shift` 加速，`Ctrl` 减速，滚轮调整速度指数。
+- Free flight：点击 canvas 进入 Pointer Lock。相机使用 Body/Look Rig：鼠标修改相对 Body 局部天顶的 yaw/pitch，pitch 限制为 ±89°；`Q/E` 绕当前最终视线旋转整个 Body，局部 right/up、局部天顶和屏幕随之一起偏转，lookYaw/lookPitch 保持不变。因此任意 Q/E 后鼠标操作与默认姿态同构。`W/S` 沿最终 local forward、`A/D` 沿最终 local right。`Shift` 加速，`Ctrl` 减速，滚轮调整速度指数。
 - Orbit：拖动或使用 `WASD` 调整绕世界 `+Z` 的方位角与轨道仰角，仰角在极点前限制为 ±89°，避免视线与世界 up 共线；摄像机始终看向世界原点且不产生 roll。滚轮或 `Q/E` 改变轨道半径。
 - 预设不会切换控制模式；高空、低轨和深空预设朝向行星中心。
 - `全局 XYZ 网格` 固定在世界原点，可切换 XY、XZ、YZ 平面；X 永远为红色、Y 为绿色、Z 为蓝色，不跟随摄像机或地表法线移动。网格由独立透明 2D canvas 投影，不参与 WebGPU shader、深度和 tone mapping；右上角朝向标始终可见。
@@ -34,8 +34,8 @@ Pointer Lock 单个 `mousemove` 的位移长度超过 `64px` 时视为浏览器�
 - 采用与 Blender 世界轴相同的右手 Z-up 约定：`+X` 向右、`+Y` 向前、`+Z` 向上，行星中心位于世界原点。
 - 默认观察点位于行星 `-Y` 赤道方向，避免把目标锁定摄像机放在世界上轴极点。太阳方位角 `0°` 指向世界 `+Y`，`90°` 指向世界 `+X`；高度角相对世界 XY 平面。
 - `localUp = normalize(cameraPosition)`。
-- 相机局部基固定为 `right=+X`、`forward=+Y`、`up=+Z`。Free 控制状态只保存世界参考 yaw/pitch 和独立 local-forward 滚转角：先构造受 ±89° 限制的无滚转父基 `B₀`，再得到 `B = B₀Rroll`。鼠标输入按当前 roll 旋回父控制平面后更新 yaw/pitch，因此单帧不能越过世界 Z 极点且不修改滚转角；`Q/E` 只修改 `Rroll`，`PlanetCamera` 单位四元数仅保存生成后的最终渲染姿态。
-- Orbit 的方位角、仰角和半径是轨道状态的唯一来源。它改变摄像机的世界位置，再以世界 `+Z` 为 up 参考朝向球心；返回 Free 时从当前世界基初始化观察方向和滚转角。
+- 相机局部基固定为 `right=+X`、`forward=+Y`、`up=+Z`。Free 的控制真相是单位 `qBody` 与相对 Body 的 `lookYaw/lookPitch`，最终姿态固定为 `qCamera = qBody × qYaw × qPitch`。Q/E 以当前最终 forward 为世界旋转轴左乘 `qBody`，鼠标不修改 Body；最终四元数不反馈为控制角。
+- Orbit 的方位角、仰角和半径是轨道状态的唯一来源。它改变摄像机的世界位置，再以世界 `+Z` 为 up 参考朝向球心；返回 Free 时把当前完整世界基初始化为新的 Body，观察角归零。
 - 太阳不是场景物体，也没有局部 transform。UI 角度只生成一个世界空间单位方向，shader、昼夜面和太阳圆盘消费同一个方向。
 - CPU 和 GPU 长度统一使用 km，角度在 UI/CPU 输入使用 degree，三角函数和 WGSL 使用 radian。
 - CPU 世界位置使用 JavaScript `number`。GPU 把摄像机视为原点，上传 `planetCenter = -cameraPosition`，避免 shader 中再次叠加大坐标。

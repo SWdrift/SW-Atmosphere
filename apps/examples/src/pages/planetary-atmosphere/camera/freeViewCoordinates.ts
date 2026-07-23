@@ -1,22 +1,25 @@
+import { CAMERA_PITCH_LIMIT_RADIANS } from '../math/coordinates.ts'
 import {
-  CAMERA_PITCH_LIMIT_RADIANS,
-  WORLD_UP,
-} from '../math/coordinates.ts'
+  isUnitQuaternion,
+  multiplyQuaternions,
+  normalizeQuaternion,
+  quaternionFromAxisAngle,
+  quaternionFromBasis,
+  rotateVectorByQuaternion,
+  type Quaternion,
+} from '../math/quaternion.ts'
 import {
-  add,
   cross,
-  dot,
-  length,
+  isFiniteVector,
   normalize,
   projectOntoPlane,
-  scale,
   type Vec3,
 } from '../math/vector3.ts'
 
 export interface FreeView {
+  bodyOrientation: Quaternion
   yawRadians: number
   pitchRadians: number
-  rollRadians: number
 }
 
 export interface FreeViewBasis {
@@ -27,116 +30,89 @@ export interface FreeViewBasis {
 
 export function freeViewFromBasis(forward: Vec3, up: Vec3): FreeView {
   const normalizedForward = normalize(forward)
-  const pitchRadians = Math.asin(
-    Math.max(
-      -Math.sin(CAMERA_PITCH_LIMIT_RADIANS),
-      Math.min(
-        Math.sin(CAMERA_PITCH_LIMIT_RADIANS),
-        normalizedForward[2],
-      ),
-    ),
-  )
-  const yawRadians = Math.atan2(
-    normalizedForward[0],
-    normalizedForward[1],
-  )
-  const constrainedForward: Vec3 = [
-    Math.sin(yawRadians) * Math.cos(pitchRadians),
-    Math.cos(yawRadians) * Math.cos(pitchRadians),
-    Math.sin(pitchRadians),
-  ]
-  const baseRight = normalize(cross(constrainedForward, WORLD_UP))
-  const baseUp = normalize(cross(baseRight, constrainedForward))
-  const normalizedUp = normalize(projectOntoPlane(up, constrainedForward))
+  const normalizedUp = normalize(projectOntoPlane(up, normalizedForward))
+  const right = normalize(cross(normalizedForward, normalizedUp))
 
   return {
-    yawRadians,
-    pitchRadians,
-    rollRadians: Math.atan2(
-      dot(normalizedUp, baseRight),
-      dot(normalizedUp, baseUp),
+    bodyOrientation: quaternionFromBasis(
+      right,
+      normalizedForward,
+      normalizedUp,
     ),
+    yawRadians: 0,
+    pitchRadians: 0,
   }
 }
 
 export function freeViewBasis(view: FreeView): FreeViewBasis {
   if (
+    !isUnitQuaternion(view.bodyOrientation) ||
     !Number.isFinite(view.yawRadians) ||
     !Number.isFinite(view.pitchRadians) ||
-    !Number.isFinite(view.rollRadians) ||
     Math.abs(view.pitchRadians) > CAMERA_PITCH_LIMIT_RADIANS
   ) {
-    throw new Error('自由摄像机视角必须使用有限角度，pitch 必须位于 ±89°。')
+    throw new Error('自由摄像机必须使用单位 Body 姿态和 ±89° 内的有限观察角。')
   }
 
-  const forward: Vec3 = [
-    Math.sin(view.yawRadians) * Math.cos(view.pitchRadians),
-    Math.cos(view.yawRadians) * Math.cos(view.pitchRadians),
-    Math.sin(view.pitchRadians),
-  ]
-  const baseRight = normalize(cross(forward, WORLD_UP))
-  const baseUp = normalize(cross(baseRight, forward))
-  const cosine = Math.cos(view.rollRadians)
-  const sine = Math.sin(view.rollRadians)
+  const yaw = quaternionFromAxisAngle([0, 0, -1], view.yawRadians)
+  const pitch = quaternionFromAxisAngle([1, 0, 0], view.pitchRadians)
+  const orientation = normalizeQuaternion(
+    multiplyQuaternions(
+      view.bodyOrientation,
+      multiplyQuaternions(yaw, pitch),
+    ),
+  )
 
   return {
-    right: add(scale(baseRight, cosine), scale(baseUp, -sine)),
-    forward,
-    up: add(scale(baseRight, sine), scale(baseUp, cosine)),
+    right: normalize(rotateVectorByQuaternion([1, 0, 0], orientation)),
+    forward: normalize(rotateVectorByQuaternion([0, 1, 0], orientation)),
+    up: normalize(rotateVectorByQuaternion([0, 0, 1], orientation)),
   }
 }
 
 export function rotateFreeView(
   view: FreeView,
-  cameraLocalRotationRadians: Vec3,
+  lookRotationRadians: Vec3,
 ): FreeView {
-  if (Math.abs(cameraLocalRotationRadians[1]) > 1e-12) {
-    throw new Error('鼠标观察旋转不能修改本地滚转。')
+  if (
+    !isFiniteVector(lookRotationRadians) ||
+    Math.abs(lookRotationRadians[1]) > 1e-12
+  ) {
+    throw new Error('鼠标观察旋转必须是有限向量且不能修改 Body 姿态。')
   }
 
-  const angleRadians = length(cameraLocalRotationRadians)
-
-  if (!Number.isFinite(angleRadians)) {
-    throw new Error('自由摄像机观察旋转必须是有限向量。')
-  }
-
-  if (angleRadians <= 1e-12) {
-    return view
-  }
-
-  const cosine = Math.cos(view.rollRadians)
-  const sine = Math.sin(view.rollRadians)
-  const pitchDelta =
-    cameraLocalRotationRadians[0] * cosine +
-    cameraLocalRotationRadians[2] * sine
-  const yawDelta =
-    cameraLocalRotationRadians[0] * sine -
-    cameraLocalRotationRadians[2] * cosine
-  const yawRadians = view.yawRadians + yawDelta
+  const yawRadians = view.yawRadians - lookRotationRadians[2]
 
   return {
+    bodyOrientation: view.bodyOrientation,
     yawRadians: Math.atan2(Math.sin(yawRadians), Math.cos(yawRadians)),
     pitchRadians: Math.max(
       -CAMERA_PITCH_LIMIT_RADIANS,
       Math.min(
         CAMERA_PITCH_LIMIT_RADIANS,
-        view.pitchRadians + pitchDelta,
+        view.pitchRadians + lookRotationRadians[0],
       ),
     ),
-    rollRadians: view.rollRadians,
   }
 }
 
-export function rollFreeView(view: FreeView, deltaRadians: number): FreeView {
+export function rollFreeBody(view: FreeView, deltaRadians: number): FreeView {
   if (!Number.isFinite(deltaRadians)) {
-    throw new Error('自由摄像机滚转增量必须是有限数。')
+    throw new Error('自由摄像机 Body 偏转增量必须是有限数。')
   }
 
-  const rollRadians = view.rollRadians + deltaRadians
+  if (Math.abs(deltaRadians) <= 1e-12) {
+    return view
+  }
+
+  const forward = freeViewBasis(view).forward
+  const bodyRoll = quaternionFromAxisAngle(forward, deltaRadians)
 
   return {
+    bodyOrientation: normalizeQuaternion(
+      multiplyQuaternions(bodyRoll, view.bodyOrientation),
+    ),
     yawRadians: view.yawRadians,
     pitchRadians: view.pitchRadians,
-    rollRadians: Math.atan2(Math.sin(rollRadians), Math.cos(rollRadians)),
   }
 }

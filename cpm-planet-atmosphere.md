@@ -6,7 +6,8 @@
 
 - 世界空间是右手 Z-up 笛卡尔坐标：`+X` 右、`+Y` 前、`+Z` 上，行星中心为原点。
 - 相机局部基为 `+X` right、`+Y` forward、`+Z` up；`PlanetCamera` 单位四元数是最终渲染姿态的唯一真相，renderer 只消费世界空间 `right/up/forward`。
-- Free 控制状态是世界参考 yaw/pitch 与独立 local-forward 滚转角：由受限 yaw/pitch 构造无滚转父基 `B₀`，最终基为 `B = B₀Rroll`。鼠标输入按当前 roll 旋回父控制平面后更新 yaw/pitch；世界 `±Z` 是 z1 极点，必须在更新控制角时把 pitch 限制为 ±89°，不能先越过极点再从 forward 事后反解或限幅。Q/E 只修改滚转且不控制升降。Orbit 单独使用世界 Z-up turntable 方位角、仰角和半径。
+- Free 使用传统 Body/Look Rig：单位 `qBody` 定义人的局部 right/forward/up 与局部天顶，`lookYaw/lookPitch` 是相对 Body 的观察角，pitch 限制为 ±89°；最终姿态固定为 `qCamera = qBody × qYaw × qPitch`。
+- Q/E 绕当前最终 forward 旋转整个 Body，lookYaw/lookPitch 不变；鼠标只更新 Look，不修改 Body。因此偏转后的局部坐标、屏幕与局部天顶整体一致旋转，操作规律与默认姿态同构。最终姿态不得反解回控制状态。Orbit 单独使用世界 Z-up turntable 方位角、仰角和半径。
 - Free 的 WASD 缓动速度保存为相机局部分量，每帧再通过当前 right/forward/up 基转换到世界空间，避免横滚后残留旧世界方向。
 - 天空经纬 debug 是无限远方向层，不读取相机位置；它用于区分姿态跳变与位置/场景问题，不代表天空盒大气。
 - 星球、太阳、大气、世界 XYZ 网格和天空经纬方向都以世界空间为权威定义；GPU camera-relative 只平移数值原点，摄像机姿态只负责派生屏幕观察结果。

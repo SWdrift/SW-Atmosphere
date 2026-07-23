@@ -31,7 +31,7 @@ import {
 } from '../src/pages/planetary-atmosphere/camera/CameraController.ts'
 import {
   freeViewBasis,
-  freeViewFromBasis,
+  rollFreeBody,
   rotateFreeView,
   type FreeView,
 } from '../src/pages/planetary-atmosphere/camera/freeViewCoordinates.ts'
@@ -554,45 +554,62 @@ test('四元数旋转：跨越极点不退化并保持单位长度', () => {
   close(length(rotated), 1)
 })
 
-test('自由摄像机：鼠标沿滚转后的视口轴旋转且不修改滚转角', () => {
-  const view: FreeView = {
-    yawRadians: 0,
-    pitchRadians: 0,
-    rollRadians: Math.PI / 3,
+test('自由摄像机：Body 偏转前后鼠标观察规律一致', () => {
+  const levelView: FreeView = {
+    bodyOrientation: [0, 0, 0, 1],
+    yawRadians: 0.4,
+    pitchRadians: 0.2,
   }
-  const basis = freeViewBasis(view)
-  const rotated = rotateFreeView(view, [1e-5, 0, 0])
-  const rotatedBasis = freeViewBasis(rotated)
-  const forwardDelta = normalize([
-    rotatedBasis.forward[0] - basis.forward[0],
-    rotatedBasis.forward[1] - basis.forward[1],
-    rotatedBasis.forward[2] - basis.forward[2],
-  ])
+  const rolledView = rollFreeBody(levelView, Math.PI / 3)
+  const input: [number, number, number] = [0.03, 0, -0.02]
+  const levelRotated = rotateFreeView(levelView, input)
+  const rollRotated = rotateFreeView(rolledView, input)
 
-  close(dot(forwardDelta, basis.up), 1, 1e-5)
-  close(rotated.rollRadians, view.rollRadians)
-  close(dot(rotatedBasis.forward, rotatedBasis.right), 0, 1e-9)
-  close(dot(rotatedBasis.forward, rotatedBasis.up), 0, 1e-9)
+  close(levelRotated.yawRadians, rollRotated.yawRadians)
+  close(levelRotated.pitchRadians, rollRotated.pitchRadians)
+  assert.deepEqual(levelRotated.bodyOrientation, levelView.bodyOrientation)
+  assert.deepEqual(rollRotated.bodyOrientation, rolledView.bodyOrientation)
 })
 
-test('自由摄像机：世界 Z 极点前限制 pitch 并保留本地滚转', () => {
-  let view: FreeView = {
+test('自由摄像机：相反观察与 Body 偏转输入均闭合完整姿态', () => {
+  const view: FreeView = {
+    bodyOrientation: [0, 0, 0, 1],
+    yawRadians: 0.3,
+    pitchRadians: 0.2,
+  }
+  const firstBasis = freeViewBasis(view)
+  const moved = rotateFreeView(view, [0.04, 0, -0.07])
+  const lookClosed = rotateFreeView(moved, [-0.04, 0, 0.07])
+  const beforeRollBasis = freeViewBasis(lookClosed)
+  const rolled = rollFreeBody(lookClosed, 0.6)
+  const rolledBasis = freeViewBasis(rolled)
+  const closed = rollFreeBody(rolled, -0.6)
+  const closedBasis = freeViewBasis(closed)
+
+  close(dot(beforeRollBasis.forward, rolledBasis.forward), 1)
+  close(dot(beforeRollBasis.up, rolledBasis.up), Math.cos(0.6))
+  close(dot(firstBasis.forward, closedBasis.forward), 1)
+  close(dot(firstBasis.right, closedBasis.right), 1)
+  close(dot(firstBasis.up, closedBasis.up), 1)
+  close(closed.yawRadians, view.yawRadians)
+  close(closed.pitchRadians, view.pitchRadians)
+})
+
+test('自由摄像机：Body 偏转后 pitch 仍相对局部天顶限制', () => {
+  const levelView: FreeView = {
+    bodyOrientation: [0, 0, 0, 1],
     yawRadians: 0,
-    pitchRadians: 0,
-    rollRadians: Math.PI / 4,
+    pitchRadians: CAMERA_PITCH_LIMIT_RADIANS,
   }
+  const view = rollFreeBody(levelView, Math.PI / 4)
+  const blockedPitch = rotateFreeView(view, [0.02, 0, 0])
+  const freeYaw = rotateFreeView(view, [0, 0, -0.02])
 
-  for (let index = 0; index < 400; index += 1) {
-    view = rotateFreeView(view, [0.01, 0, 0])
-    const basis = freeViewBasis(view)
-
-    assert.ok(isFiniteVector(basis.forward))
-    assert.ok(isFiniteVector(basis.right))
-    assert.ok(isFiniteVector(basis.up))
-    close(view.rollRadians, Math.PI / 4)
-  }
-
-  close(view.pitchRadians, CAMERA_PITCH_LIMIT_RADIANS)
+  close(blockedPitch.pitchRadians, view.pitchRadians)
+  close(blockedPitch.yawRadians, view.yawRadians)
+  close(freeYaw.pitchRadians, view.pitchRadians)
+  close(freeYaw.yawRadians, 0.02)
+  assert.deepEqual(freeYaw.bodyOrientation, view.bodyOrientation)
 })
 
 test('Orbit：turntable 在极点前停止，方位角仍连续', () => {
@@ -610,11 +627,15 @@ test('Orbit：turntable 在极点前停止，方位角仍连续', () => {
 
 test('自由摄像机：局部 forward 经四元数转换后在全局坐标中移动', () => {
   const camera = new PlanetCamera([0, 0, 7000], [0, 1, 0], [0, 0, 1], 60)
-  const basis = freeViewBasis({
-    yawRadians: 0.6,
-    pitchRadians: 0.4,
-    rollRadians: Math.PI / 3,
-  })
+  const view = rollFreeBody(
+    {
+      bodyOrientation: [0, 0, 0, 1],
+      yawRadians: 0.6,
+      pitchRadians: 0.4,
+    },
+    Math.PI / 3,
+  )
+  const basis = freeViewBasis(view)
   camera.setPose(camera.position, basis.forward, basis.up)
 
   const positionBeforeMove = camera.position
@@ -629,13 +650,17 @@ test('自由摄像机：局部 forward 经四元数转换后在全局坐标中�
   close(dot(camera.forward, camera.up), 0)
 })
 
-test('自由摄像机：横滚时 WASD 跟随局部基，Q/E 只改变本地横滚', () => {
+test('自由摄像机：偏转时 WASD 跟随最终局部基，Q/E 旋转 Body', () => {
   const camera = new PlanetCamera([0, 0, 100_000], [0, 1, 0], [0, 0, 1], 60)
-  const initialBasis = freeViewBasis({
-    yawRadians: 0,
-    pitchRadians: 0,
-    rollRadians: Math.PI / 3,
-  })
+  const initialView = rollFreeBody(
+    {
+      bodyOrientation: [0, 0, 0, 1],
+      yawRadians: 0,
+      pitchRadians: 0,
+    },
+    Math.PI / 3,
+  )
+  const initialBasis = freeViewBasis(initialView)
   camera.setPose(camera.position, initialBasis.forward, initialBasis.up)
   const controller = new CameraController(
     {} as HTMLCanvasElement,
@@ -683,12 +708,10 @@ test('自由摄像机：横滚时 WASD 跟随局部基，Q/E 只改变本地横�
 
   assert.deepEqual(rollCamera.position, positionBeforeRoll)
   close(dot(rollCamera.forward, forwardBeforeRoll), 1, 1e-9)
-  assert.ok(dot(rollCamera.up, upBeforeRoll) < 0.9)
-  close(rollControls.freeView.rollRadians, 0.8)
-  close(
-    freeViewFromBasis(rollCamera.forward, rollCamera.up).rollRadians,
-    rollControls.freeView.rollRadians,
-  )
+  close(dot(rollCamera.up, upBeforeRoll), Math.cos(0.8), 1e-9)
+  close(rollControls.freeView.yawRadians, 0)
+  close(rollControls.freeView.pitchRadians, 0)
+  assert.ok(isUnitQuaternion(rollControls.freeView.bodyOrientation))
 })
 
 test('调试 overlay 投影：使用全局点并正确剔除相机后方', () => {

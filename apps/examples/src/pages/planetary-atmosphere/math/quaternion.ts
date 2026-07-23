@@ -39,6 +39,21 @@ export function quaternionFromAxisAngle(axis: Vec3, radians: number): Quaternion
   ]
 }
 
+export function multiplyQuaternions(
+  left: Quaternion,
+  right: Quaternion,
+): Quaternion {
+  const [lx, ly, lz, lw] = left
+  const [rx, ry, rz, rw] = right
+
+  return [
+    lw * rx + lx * rw + ly * rz - lz * ry,
+    lw * ry - lx * rz + ly * rw + lz * rx,
+    lw * rz + lx * ry - ly * rx + lz * rw,
+    lw * rw - lx * rx - ly * ry - lz * rz,
+  ]
+}
+
 export function quaternionFromBasis(right: Vec3, forward: Vec3, up: Vec3): Quaternion {
   const m00 = right[0]
   const m01 = forward[0]
