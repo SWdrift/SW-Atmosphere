@@ -1055,6 +1055,22 @@ fn integrate_aerial_transfer(
   );
 }
 
+fn production_surface_radiance(
+  surface_position: vec3<f32>,
+) -> vec3<f32> {
+  let surface_normal = normalize(surface_position);
+  let sun_cosine =
+    max(dot(surface_normal, frame.sun_direction.xyz), 0.0);
+  return atmosphere.ground_albedo_ozone_half_width.xyz
+    * atmosphere.solar_irradiance_w_m2_nm.xyz
+    * sample_solar_transmittance(
+      surface_position + surface_normal * 0.001,
+      frame.sun_direction.xyz,
+    )
+    * sun_cosine
+    / PI;
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn cs_aerial_perspective(@builtin(global_invocation_id) id: vec3<u32>) {
   let dimensions = textureDimensions(aerial_radiance_output);
@@ -1296,11 +1312,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let camera_inside_atmosphere =
       length(camera_planet_position) < atmosphere_radius;
-    let production_inside =
-      frame.integration.z > 0.5
-        && camera_inside_atmosphere;
+    let production = frame.integration.z > 0.5;
 
-    if (production_inside) {
+    if (production && camera_inside_atmosphere) {
       var sky_radiance = sample_sky_view(
         camera_planet_position,
         ray_direction,
@@ -1320,18 +1334,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
       if (hits_ground) {
         let surface_position =
           camera_planet_position + ray_direction * ground_hit.near;
-        let surface_normal = normalize(surface_position);
-        let sun_cosine =
-          max(dot(surface_normal, frame.sun_direction.xyz), 0.0);
-        let surface_radiance =
-          atmosphere.ground_albedo_ozone_half_width.xyz
-            * atmosphere.solar_irradiance_w_m2_nm.xyz
-            * sample_solar_transmittance(
-              surface_position + surface_normal * 0.001,
-              frame.sun_direction.xyz,
-            )
-            * sun_cosine
-            / PI;
+        let surface_radiance = production_surface_radiance(surface_position);
         let aerial = sample_ground_aerial_endpoint(input.uv);
         var aerial_radiance = aerial.radiance;
         var aerial_transmittance = aerial.transmittance;
@@ -1367,67 +1370,89 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
           surface_radiance * aerial_transmittance + aerial_radiance;
         radiance = mix(sky_radiance, ground_radiance, ground_coverage);
       }
+    } else if (production) {
+      let entry_position =
+        camera_planet_position + ray_direction * segment_start;
+      let transfer = integrate_aerial_transfer(
+        entry_position,
+        ray_direction,
+        max(segment_end - segment_start, 0.0),
+        u32(frame.integration.x),
+      );
+      radiance = transfer.radiance;
+
+      if (hits_ground) {
+        let surface_position =
+          camera_planet_position + ray_direction * ground_hit.near;
+        radiance +=
+          production_surface_radiance(surface_position)
+            * transfer.transmittance;
+      } else if (sun_coverage > 0.0) {
+        radiance +=
+          transfer.transmittance * solar_radiance * sun_coverage;
+      }
     } else {
-    let view_step_count = u32(frame.integration.x);
-    let light_step_count = u32(frame.integration.y);
-    let step_length = max(segment_end - segment_start, 0.0) / f32(view_step_count);
-    let view_sun_cosine = dot(ray_direction, frame.sun_direction.xyz);
-    let phase_rayleigh = rayleigh_phase(view_sun_cosine);
-    let phase_mie = cornette_shanks_phase(
-      view_sun_cosine,
-      atmosphere.mie_extinction_phase_g.w,
-    );
-    var view_optical_depth = vec3<f32>(0.0);
-
-    for (var step = 0u; step < view_step_count; step += 1u) {
-      let sample_distance =
-        segment_start + (f32(step) + 0.5) * step_length;
-      let sample_position = ray_origin + ray_direction * sample_distance;
-      let medium = sample_medium(sample_position, planet_center);
-      let view_transmittance =
-        exp(-(view_optical_depth + medium.extinction * step_length * 0.5));
-      let sun_transmittance = transmittance_to_sun(
-        sample_position,
-        frame.sun_direction.xyz,
-        planet_center,
-        light_step_count,
+      let view_step_count = u32(frame.integration.x);
+      let light_step_count = u32(frame.integration.y);
+      let step_length =
+        max(segment_end - segment_start, 0.0) / f32(view_step_count);
+      let view_sun_cosine = dot(ray_direction, frame.sun_direction.xyz);
+      let phase_rayleigh = rayleigh_phase(view_sun_cosine);
+      let phase_mie = cornette_shanks_phase(
+        view_sun_cosine,
+        atmosphere.mie_extinction_phase_g.w,
       );
-      let scattering =
-        medium.scattering_rayleigh * phase_rayleigh
-          + medium.scattering_mie * phase_mie;
+      var view_optical_depth = vec3<f32>(0.0);
 
-      radiance +=
-        view_transmittance
-          * sun_transmittance
-          * scattering
-          * atmosphere.solar_irradiance_w_m2_nm.xyz
-          * step_length;
-      view_optical_depth += medium.extinction * step_length;
-    }
+      for (var step = 0u; step < view_step_count; step += 1u) {
+        let sample_distance =
+          segment_start + (f32(step) + 0.5) * step_length;
+        let sample_position = ray_origin + ray_direction * sample_distance;
+        let medium = sample_medium(sample_position, planet_center);
+        let view_transmittance =
+          exp(-(view_optical_depth + medium.extinction * step_length * 0.5));
+        let sun_transmittance = transmittance_to_sun(
+          sample_position,
+          frame.sun_direction.xyz,
+          planet_center,
+          light_step_count,
+        );
+        let scattering =
+          medium.scattering_rayleigh * phase_rayleigh
+            + medium.scattering_mie * phase_mie;
 
-    let segment_transmittance = exp(-view_optical_depth);
+        radiance +=
+          view_transmittance
+            * sun_transmittance
+            * scattering
+            * atmosphere.solar_irradiance_w_m2_nm.xyz
+            * step_length;
+        view_optical_depth += medium.extinction * step_length;
+      }
 
-    if (hits_ground) {
-      let surface_position = ray_origin + ray_direction * ground_hit.near;
-      let surface_normal = normalize(surface_position - planet_center);
-      let sun_cosine = max(dot(surface_normal, frame.sun_direction.xyz), 0.0);
-      let sun_transmittance = transmittance_to_sun(
-        surface_position + surface_normal * 0.001,
-        frame.sun_direction.xyz,
-        planet_center,
-        light_step_count,
-      );
-      radiance +=
-        segment_transmittance
-          * atmosphere.ground_albedo_ozone_half_width.xyz
-          * atmosphere.solar_irradiance_w_m2_nm.xyz
-          * sun_transmittance
-          * sun_cosine
-          / PI;
-    } else if (sun_coverage > 0.0) {
-      radiance +=
-        segment_transmittance * solar_radiance * sun_coverage;
-    }
+      let segment_transmittance = exp(-view_optical_depth);
+
+      if (hits_ground) {
+        let surface_position = ray_origin + ray_direction * ground_hit.near;
+        let surface_normal = normalize(surface_position - planet_center);
+        let sun_cosine = max(dot(surface_normal, frame.sun_direction.xyz), 0.0);
+        let sun_transmittance = transmittance_to_sun(
+          surface_position + surface_normal * 0.001,
+          frame.sun_direction.xyz,
+          planet_center,
+          light_step_count,
+        );
+        radiance +=
+          segment_transmittance
+            * atmosphere.ground_albedo_ozone_half_width.xyz
+            * atmosphere.solar_irradiance_w_m2_nm.xyz
+            * sun_transmittance
+            * sun_cosine
+            / PI;
+      } else if (sun_coverage > 0.0) {
+        radiance +=
+          segment_transmittance * solar_radiance * sun_coverage;
+      }
     }
   } else if (sun_coverage > 0.0) {
     radiance = solar_radiance * sun_coverage;
