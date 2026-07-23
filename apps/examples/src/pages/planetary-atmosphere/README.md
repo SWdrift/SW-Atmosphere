@@ -150,7 +150,7 @@ Multi-Scattering LUT 使用 Hillaire 2020 §5.5 的 `(sunCosine, altitude)` 参�
 
 `rgba16float` 通过 `textureLoad` 手工插值，不要求 `float16-filterable` optional feature。Transmittance RGB 是无量纲透射率；Multi-Scattering RGB 是后续乘以 `solarIrradianceWattsPerSquareMeterPerNm` 的 `sr^-1` 散射因子。Aerial Radiance 的 alpha 标记该 froxel 射线是否以地表为终点，其他 LUT 的 alpha 当前没有物理含义。
 
-Sky-View 使用 192×108 的 Hillaire 分段平方地平线映射，只在相机位于大气内时生成和读取。其 dirty key 只包含观察半径、太阳天顶余弦和多重散射开关；大气外 Production 明确回退逐像素 Reference 积分。
+Sky-View 使用 192×108 的 Hillaire 分段平方地平线映射，只在相机位于大气内时生成和读取。其 dirty key 只包含观察半径、太阳天顶余弦和多重散射开关。大气外 Production 不复用该映射：每个命中大气壳的像素只积分大气顶入口到大气出口或地表的实际介质路径，太阳透射和多重散射分别查询共享 Transmittance 与 Multi-Scattering LUT；显式 Reference 模式仍使用视线与太阳路径嵌套积分。
 
 Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一个保存 RGB 入射散射辐亮度 `L`，另一个保存无量纲 RGB 透射率 `T`，不把六个通道模糊地压入普通 RGBA。每条屏幕射线的 `z` 切片对应 `distance = boundaryDistance × z²`，其中 boundary 是该射线最先到达的地表或大气顶。当前地表 Production 合成严格使用 `surfaceRadiance × T + L`；纯地表四邻域使用归一化的地表类 froxel 插值。地表切线附近根据 Aerial 角向 texel 的 X/Y 联合判别式足迹建立连续逐像素积分带，斜向边界不会退化为单轴宽度；Aerial `L/T` 调试视图也使用这一重建边界，禁止用离散 froxel 分类单元切换算法或混合终点语义不同的样本。
 
@@ -181,7 +181,7 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 
 - 已有 Reference Rayleigh、Mie、ozone、Beer-Lambert 和单次散射直接积分。
 - 已建立 Transmittance、Multi-Scattering、Sky-View、双 3D Aerial Perspective 与地表最终合成。
-- 大气外路径当前使用逐像素 Reference 单次散射；专用的大气外 Production 优化尚未实现。
+- 大气外 Production 已使用逐像素单层视线积分，并复用 Transmittance 与 Multi-Scattering LUT；低分辨率 Outside View LUT 尚未实现。
 - 固定场景已有可重复入口，但 Reference/Production 像素误差尚未由 GPU readback 自动量化。
 - `rgba16float` storage 与 32³ texture limit 仍需在实际目标设备验证；读取采用 `textureLoad` 手工插值，不依赖 `float16-filterable`。
 - 大气壳颜色只存在于显式几何调试模式，不代表物理天空。

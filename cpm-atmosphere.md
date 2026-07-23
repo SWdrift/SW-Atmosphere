@@ -1,6 +1,6 @@
 # Planet Atmosphere Memory
 
-本文件保存 `cp-planet-atmosphere.md` 的可复用工程记忆；控制目标和活跃任务仍以 CP 为准。
+本文件保存 `cp-atmosphere.md` 的可复用工程记忆；控制目标和活跃任务仍以 CP 为准。
 
 ## 坐标与控制
 
@@ -32,6 +32,7 @@
 - 太阳圆盘辐亮度只由 `solarIrradiance / (2π(1 - cos(angularRadius)))` 构建一次；glare/bloom 等相机光学效果必须与大气散射和太阳能量真相分离。
 - Aerial Perspective 的地表终点与大气顶终点不是可跨类别插值的连续量。Radiance alpha 保存终点分类；纯地表邻域只混合同类样本，跨分类边界逐像素复用 Production 积分核。
 - Production 地表覆盖率由球交判别式的屏幕导数构造；Aerial 切线重建则按相邻角向 texel 射线的 X/Y 联合判别式足迹建立连续逐像素积分带，斜向边界不能只取单轴最大变化，也不能用离散 froxel 分类单元直接切换算法。最终组合仍是 `surfaceRadiance × T + L`。残留伪影必须先通过同姿态 debug 对照定位，不用整屏模糊、提高曝光或盲目扩大 LUT 掩盖。
+- 大气外 Production 不复用大气内 Sky-View/Aerial 映射。外部屏幕射线只积分大气顶入口到大气出口或地表的实际介质区间，复用共享 `integrate_aerial_transfer`、Transmittance LUT 与 Multi-Scattering LUT；显式 Reference 保留视线与太阳路径嵌套积分作为对照。
 
 ## 验证
 
