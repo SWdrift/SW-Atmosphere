@@ -93,6 +93,35 @@
 - [ ] README 补全物理公式、LUT 数据流、内存布局、性能、误差和平台迁移边界。
 - [ ] 最终逐项核对 12 条完成标准，运行 build/test/GPU/视觉验证并报告全部缺项。
 
+## Next Implementation Plan
+
+### 架构前置
+
+1. WGSL 只保留一个受版本控制的权威路径：renderer、README 和验证均使用 `atmosphere/shaders/`。
+2. 将 `StageOneAtmosphereParameters` 收口为完整物理参数真相。只存底部/顶部半径、散射与消光系数、密度剖面、相函数参数、吸收、地表反照率和太阳量；`atmosphereTopHeightKm` 等可推导量不重复存储，摄像机初始高度和最低高度移回摄像机边界。
+3. 物理参数使用独立 uniform buffer，仅在参数变更时上传并触发 LUT dirty chain；相机、太阳方向、曝光和调试状态留在逐帧 buffer。布局常量与序列化只在参数模块定义一次。
+4. 当前不重构 `CameraController`、`DebugOverlay` 或 Vue 页面。它们不进入大气物理调用链；除非后续改动直接加重其职责，否则保持阶段一边界。
+5. WGSL 暂用一个可独立校验的模块，以清晰分区组织共享函数和多个 entry point。WGSL 没有标准 include，在没有可验证组合工具前不拆成需要字符串拼接的 shader 片段，也不复制物理公式。
+6. `AtmosphereRenderer` 继续作为 WebGPU 设备、资源生命周期和 pass 顺序的唯一协调器；不预先建立 class-per-pass。资源字段明显成组或 Production pass 已造成不同变化原因时，再提取有真实生命周期边界的资源对象。
+
+### 着色器顺序
+
+1. 参数与布局：确定类地球参数来源、合法范围、TS/WGSL 对齐和序列化测试；非法参数在创建 renderer 前 fail fast。
+2. 共享物理核：实现安全球面距离、Rayleigh/Mie/ozone density、scattering/extinction、Rayleigh 与 Cornette-Shanks phase、optical depth 和 Beer-Lambert。
+3. Reference：先在现有全屏 pass 中做可配置视线/太阳路径直接积分，完成行星阴影、地表、太阳圆盘和唯一一次 tone mapping；此阶段不创建 LUT。
+4. Reference 基准：固化 ground noon、sunset、twilight、space limb 的参数、相机和太阳状态，并覆盖 profile、phase、极端高度及无 NaN/Infinity 测试。
+5. Production：Reference 门槛通过后，依次加入 Transmittance、Multi-Scattering、Sky-View、Aerial Perspective 3D 和 Final；每加入一项就提供独立 debug 与 Reference 对照，不并行铺开全部 pass。
+
+### 资料定位
+
+| 实现问题 | 首要依据 |
+| --- | --- |
+| 边界距离、地表遮挡、Beer-Lambert、数值保护 | Bruneton 2017 `functions.glsl` 的 Transmittance 与 utility functions |
+| density profile、ozone、量纲和测试方式 | Bruneton 2017 `definitions.glsl`、`functions_test.cc`、reference 实现 |
+| Production pass 与参数化 | Hillaire 2020 §5.2 Transmittance、§5.3 Sky-View、§5.4 Aerial Perspective、§5.5 Multiple Scattering |
+| 论文未展开的 pass 细节 | `UnrealEngineSkyAtmosphere/RenderSkyRayMarching.hlsl` |
+| 最终 `scene × T + L` 组合与地空连续 | Bruneton 2017 rendering functions 与 Hillaire 2020 final rendering |
+
 ## Stage One Baseline
 
 - 页面、路由、模块边界和 README 已建立；Vue 只负责 canvas、生命周期和调试 UI。
