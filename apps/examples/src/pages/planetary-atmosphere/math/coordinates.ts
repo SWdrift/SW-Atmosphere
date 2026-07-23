@@ -11,51 +11,12 @@ export const WORLD_UP: Vec3 = [0, 0, 1]
 export const INITIAL_CAMERA_RADIAL: Vec3 = [0, -1, 0]
 export const CAMERA_PITCH_LIMIT_RADIANS = (89 * Math.PI) / 180
 
-export interface ZUpViewAngles {
-  yawRadians: number
-  pitchRadians: number
-}
-
 export function altitudeFromPosition(position: Vec3, planetRadiusKm: number): number {
   return Math.hypot(position[0], position[1], position[2]) - planetRadiusKm
 }
 
 export function localUpFromPosition(position: Vec3): Vec3 {
   return normalize(position)
-}
-
-export function zUpForwardFromAngles(angles: ZUpViewAngles): Vec3 {
-  const horizontal = Math.cos(angles.pitchRadians)
-
-  return normalize([
-    Math.sin(angles.yawRadians) * horizontal,
-    Math.cos(angles.yawRadians) * horizontal,
-    Math.sin(angles.pitchRadians),
-  ])
-}
-
-export function zUpViewAnglesFromForward(
-  forward: Vec3,
-  fallbackYawRadians: number,
-): ZUpViewAngles {
-  if (!Number.isFinite(fallbackYawRadians)) {
-    throw new Error('备用偏航角必须是有限数。')
-  }
-
-  const direction = normalize(forward)
-  const horizontalLength = Math.hypot(direction[0], direction[1])
-  const yawRadians =
-    horizontalLength <= 1e-9
-      ? fallbackYawRadians
-      : Math.atan2(direction[0], direction[1])
-
-  return {
-    yawRadians,
-    pitchRadians: Math.max(
-      -CAMERA_PITCH_LIMIT_RADIANS,
-      Math.min(CAMERA_PITCH_LIMIT_RADIANS, Math.asin(direction[2])),
-    ),
-  }
 }
 
 export function sunDirectionFromAngles(

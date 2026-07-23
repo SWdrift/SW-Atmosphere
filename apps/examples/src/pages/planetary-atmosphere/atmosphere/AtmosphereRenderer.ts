@@ -1,21 +1,102 @@
 import type { PlanetCamera } from '../camera/PlanetCamera.ts'
 import type { Vec3 } from '../math/vector3.ts'
-import type { StageOneAtmosphereParameters } from './AtmosphereParameters.ts'
+import {
+  ATMOSPHERE_UNIFORM_BYTE_SIZE,
+  serializeAtmosphereParameters,
+  type AtmosphereParameters,
+} from './AtmosphereParameters.ts'
+import { AtmosphereLutPipeline } from './AtmosphereLutPipeline.ts'
+import { GpuTimestampRecorder } from './GpuTimestampRecorder.ts'
 import stageOneShader from './shaders/stageOne.wgsl?raw'
 
-const UNIFORM_FLOAT_COUNT = 28
-const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * Float32Array.BYTES_PER_ELEMENT
+const FRAME_UNIFORM_FLOAT_COUNT = 32
+const FRAME_UNIFORM_BYTE_SIZE =
+  FRAME_UNIFORM_FLOAT_COUNT * Float32Array.BYTES_PER_ELEMENT
+
+export type AtmosphereQuality = 'reference' | 'low' | 'medium' | 'high'
+export type AtmosphereDebugView =
+  | 'final'
+  | 'transmittance'
+  | 'multiple-scattering'
+  | 'sky-view'
+  | 'aerial-radiance'
+  | 'aerial-transmittance'
+  | 'density'
+
+const QUALITY_SETTINGS = Object.freeze({
+  reference: {
+    production: false,
+    referenceViewSteps: 48,
+    referenceLightSteps: 24,
+    skyViewSteps: 32,
+    aerialPerspectiveSteps: 16,
+  },
+  low: {
+    production: true,
+    referenceViewSteps: 24,
+    referenceLightSteps: 12,
+    skyViewSteps: 12,
+    aerialPerspectiveSteps: 6,
+  },
+  medium: {
+    production: true,
+    referenceViewSteps: 32,
+    referenceLightSteps: 16,
+    skyViewSteps: 20,
+    aerialPerspectiveSteps: 10,
+  },
+  high: {
+    production: true,
+    referenceViewSteps: 48,
+    referenceLightSteps: 24,
+    skyViewSteps: 32,
+    aerialPerspectiveSteps: 16,
+  },
+} satisfies Record<
+  AtmosphereQuality,
+  {
+    production: boolean
+    referenceViewSteps: number
+    referenceLightSteps: number
+    skyViewSteps: number
+    aerialPerspectiveSteps: number
+  }
+>)
+
+const DEBUG_VIEW_INDEX = Object.freeze({
+  final: 0,
+  transmittance: 1,
+  'multiple-scattering': 2,
+  'sky-view': 3,
+  'aerial-radiance': 4,
+  'aerial-transmittance': 5,
+  density: 6,
+} satisfies Record<AtmosphereDebugView, number>)
 
 export interface StageOneFrame {
   camera: PlanetCamera
   sunDirection: Vec3
   exposure: number
   geometryDebug: boolean
+  quality: AtmosphereQuality
+  multipleScattering: boolean
+  debugView: AtmosphereDebugView
+  aerialPerspectiveSlice: number
+  rayleighEnabled: boolean
+  mieEnabled: boolean
+  ozoneEnabled: boolean
 }
 
 export interface AtmosphereRendererInfo {
   adapter: string
   canvasFormat: GPUTextureFormat
+  timestampQuerySupported: boolean
+}
+
+export interface AtmosphereFrameResult {
+  submitMilliseconds: number
+  rebuiltPasses: readonly string[]
+  gpuPassMilliseconds: Readonly<Record<string, number>> | null
 }
 
 export class AtmosphereRenderer {
@@ -24,11 +105,14 @@ export class AtmosphereRenderer {
   private readonly canvas: HTMLCanvasElement
   private readonly context: GPUCanvasContext
   private readonly device: GPUDevice
+  private readonly topRadiusKm: number
   private readonly pipeline: GPURenderPipeline
-  private readonly uniformBuffer: GPUBuffer
+  private readonly lutPipeline: AtmosphereLutPipeline
+  private readonly timestampRecorder: GpuTimestampRecorder | null
+  private readonly atmosphereUniformBuffer: GPUBuffer
+  private readonly frameUniformBuffer: GPUBuffer
   private readonly bindGroup: GPUBindGroup
-  private readonly parameters: StageOneAtmosphereParameters
-  private readonly uniformData = new Float32Array(UNIFORM_FLOAT_COUNT)
+  private readonly frameUniformData = new Float32Array(FRAME_UNIFORM_FLOAT_COUNT)
   private readonly onFatalError: (message: string) => void
   private active = true
   private destroyed = false
@@ -37,29 +121,36 @@ export class AtmosphereRenderer {
     canvas: HTMLCanvasElement,
     context: GPUCanvasContext,
     device: GPUDevice,
+    topRadiusKm: number,
     pipeline: GPURenderPipeline,
-    uniformBuffer: GPUBuffer,
+    lutPipeline: AtmosphereLutPipeline,
+    timestampRecorder: GpuTimestampRecorder | null,
+    atmosphereUniformBuffer: GPUBuffer,
+    frameUniformBuffer: GPUBuffer,
     bindGroup: GPUBindGroup,
-    parameters: StageOneAtmosphereParameters,
     info: AtmosphereRendererInfo,
     onFatalError: (message: string) => void,
   ) {
     this.canvas = canvas
     this.context = context
     this.device = device
+    this.topRadiusKm = topRadiusKm
     this.pipeline = pipeline
-    this.uniformBuffer = uniformBuffer
+    this.lutPipeline = lutPipeline
+    this.timestampRecorder = timestampRecorder
+    this.atmosphereUniformBuffer = atmosphereUniformBuffer
+    this.frameUniformBuffer = frameUniformBuffer
     this.bindGroup = bindGroup
-    this.parameters = parameters
     this.info = info
     this.onFatalError = onFatalError
   }
 
   static async create(
     canvas: HTMLCanvasElement,
-    parameters: StageOneAtmosphereParameters,
+    parameters: AtmosphereParameters,
     onFatalError: (message: string) => void,
   ): Promise<AtmosphereRenderer> {
+    const atmosphereUniformData = serializeAtmosphereParameters(parameters)
     const gpu = navigator.gpu
 
     if (!gpu) {
@@ -72,7 +163,10 @@ export class AtmosphereRenderer {
       throw new Error('没有找到可用的 WebGPU 适配器。')
     }
 
-    const device = await adapter.requestDevice()
+    const timestampQuerySupported = adapter.features.has('timestamp-query')
+    const device = await adapter.requestDevice({
+      requiredFeatures: timestampQuerySupported ? ['timestamp-query'] : [],
+    })
     const context = canvas.getContext('webgpu') as GPUCanvasContext | null
 
     if (!context) {
@@ -147,7 +241,13 @@ export class AtmosphereRenderer {
 
     const bufferUsage = (
       globalThis as typeof globalThis & {
-        GPUBufferUsage?: { UNIFORM: number; COPY_DST: number }
+        GPUBufferUsage?: {
+          UNIFORM: number
+          COPY_DST: number
+          QUERY_RESOLVE: number
+          COPY_SRC: number
+          MAP_READ: number
+        }
       }
     ).GPUBufferUsage
 
@@ -156,16 +256,81 @@ export class AtmosphereRenderer {
       throw new Error('当前环境缺少 GPUBufferUsage 常量。')
     }
 
-    const uniformBuffer = device.createBuffer({
-      label: '星球舞台帧参数',
-      size: UNIFORM_BYTE_SIZE,
+    const textureUsage = (
+      globalThis as typeof globalThis & {
+        GPUTextureUsage?: { TEXTURE_BINDING: number; STORAGE_BINDING: number }
+      }
+    ).GPUTextureUsage
+
+    if (!textureUsage) {
+      device.destroy()
+      throw new Error('当前环境缺少 GPUTextureUsage 常量。')
+    }
+    const mapMode = (
+      globalThis as typeof globalThis & {
+        GPUMapMode?: { READ: number }
+      }
+    ).GPUMapMode
+
+    if (!mapMode) {
+      device.destroy()
+      throw new Error('当前环境缺少 GPUMapMode 常量。')
+    }
+
+    const atmosphereUniformBuffer = device.createBuffer({
+      label: '大气物理参数',
+      size: ATMOSPHERE_UNIFORM_BYTE_SIZE,
       usage: bufferUsage.UNIFORM | bufferUsage.COPY_DST,
     })
-    const bindGroup = device.createBindGroup({
-      label: '星球舞台帧参数绑定组',
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+    const frameUniformBuffer = device.createBuffer({
+      label: '星球舞台帧参数',
+      size: FRAME_UNIFORM_BYTE_SIZE,
+      usage: bufferUsage.UNIFORM | bufferUsage.COPY_DST,
     })
+    device.queue.writeBuffer(atmosphereUniformBuffer, 0, atmosphereUniformData)
+    const initialFrameUniformData = new Float32Array(FRAME_UNIFORM_FLOAT_COUNT)
+    initialFrameUniformData.set([1, 1, 1, 0], 28)
+    device.queue.writeBuffer(frameUniformBuffer, 0, initialFrameUniformData)
+
+    device.pushErrorScope('validation')
+    const bindGroup = device.createBindGroup({
+      label: '大气与帧参数绑定组',
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: atmosphereUniformBuffer } },
+        { binding: 1, resource: { buffer: frameUniformBuffer } },
+      ],
+    })
+    let lutPipeline: AtmosphereLutPipeline
+
+    try {
+      lutPipeline = await AtmosphereLutPipeline.create(
+        device,
+        shaderModule,
+        pipeline,
+        atmosphereUniformBuffer,
+        frameUniformBuffer,
+        textureUsage,
+      )
+    } catch (error) {
+      await device.popErrorScope()
+      atmosphereUniformBuffer.destroy()
+      frameUniformBuffer.destroy()
+      device.destroy()
+      throw error
+    }
+    const resourceError = await device.popErrorScope()
+
+    if (resourceError) {
+      lutPipeline.destroy()
+      atmosphereUniformBuffer.destroy()
+      frameUniformBuffer.destroy()
+      device.destroy()
+      throw new Error(`大气渲染资源校验失败：\n${resourceError.message}`)
+    }
+    const timestampRecorder = timestampQuerySupported
+      ? new GpuTimestampRecorder(device, bufferUsage, mapMode.READ)
+      : null
     const adapterDescription = [
       adapter.info.vendor,
       adapter.info.architecture,
@@ -179,13 +344,17 @@ export class AtmosphereRenderer {
       canvas,
       context,
       device,
+      parameters.topRadiusKm,
       pipeline,
-      uniformBuffer,
+      lutPipeline,
+      timestampRecorder,
+      atmosphereUniformBuffer,
+      frameUniformBuffer,
       bindGroup,
-      parameters,
       {
         adapter: adapterDescription.length > 0 ? adapterDescription : '未提供适配器信息',
         canvasFormat,
+        timestampQuerySupported,
       },
       onFatalError,
     )
@@ -201,7 +370,7 @@ export class AtmosphereRenderer {
     return renderer
   }
 
-  render(frame: StageOneFrame): number {
+  render(frame: StageOneFrame): AtmosphereFrameResult {
     if (!this.active) {
       throw new Error('WebGPU renderer 已停止。')
     }
@@ -209,12 +378,31 @@ export class AtmosphereRenderer {
     const startedAt = performance.now()
     this.resizeCanvas()
     this.writeUniforms(frame)
+    this.timestampRecorder?.beginFrame(startedAt)
 
     const commandEncoder = this.device.createCommandEncoder({
       label: '星球舞台帧命令编码器',
     })
+    const quality = QUALITY_SETTINGS[frame.quality]
+    const needsDynamicLuts =
+      quality.production ||
+      frame.debugView === 'sky-view' ||
+      frame.debugView === 'aerial-radiance' ||
+      frame.debugView === 'aerial-transmittance'
+    const rebuiltPasses = this.lutPipeline.encodeDynamic(
+      commandEncoder,
+      frame,
+      quality,
+      this.canvas.width,
+      this.canvas.height,
+      this.topRadiusKm,
+      needsDynamicLuts,
+      (label) => this.timestampRecorder?.timestampWrites(label),
+    )
+
     const renderPass = commandEncoder.beginRenderPass({
       label: '星球舞台阶段一 render pass',
+      timestampWrites: this.timestampRecorder?.timestampWrites('Final'),
       colorAttachments: [
         {
           view: this.context.getCurrentTexture().createView(),
@@ -227,11 +415,21 @@ export class AtmosphereRenderer {
 
     renderPass.setPipeline(this.pipeline)
     renderPass.setBindGroup(0, this.bindGroup)
+    renderPass.setBindGroup(1, this.lutPipeline.renderBindGroup)
     renderPass.draw(3)
     renderPass.end()
+    const readsTimestamps = this.timestampRecorder?.resolve(commandEncoder) === true
     this.device.queue.submit([commandEncoder.finish()])
 
-    return performance.now() - startedAt
+    if (readsTimestamps) {
+      this.timestampRecorder?.readSubmitted()
+    }
+
+    return {
+      submitMilliseconds: performance.now() - startedAt,
+      rebuiltPasses,
+      gpuPassMilliseconds: this.timestampRecorder?.latest ?? null,
+    }
   }
 
   destroy(): void {
@@ -243,7 +441,10 @@ export class AtmosphereRenderer {
     this.active = false
     this.device.removeEventListener('uncapturederror', this.handleUncapturedError)
     this.context.unconfigure()
-    this.uniformBuffer.destroy()
+    this.atmosphereUniformBuffer.destroy()
+    this.frameUniformBuffer.destroy()
+    this.lutPipeline.destroy()
+    this.timestampRecorder?.destroy()
     this.device.destroy()
   }
 
@@ -271,27 +472,49 @@ export class AtmosphereRenderer {
     ]
     const tangentHalfFov = Math.tan((camera.verticalFovDegrees * Math.PI) / 360)
     const aspect = this.canvas.width / this.canvas.height
-    this.uniformData.set(
+    const quality = QUALITY_SETTINGS[frame.quality]
+
+    if (
+      !Number.isFinite(frame.aerialPerspectiveSlice) ||
+      frame.aerialPerspectiveSlice < 0 ||
+      frame.aerialPerspectiveSlice > 1
+    ) {
+      throw new Error('Aerial Perspective 调试切片必须位于 0 到 1。')
+    }
+
+    this.frameUniformData.set(
       [
         ...planetCenterRelativeToCamera,
-        this.parameters.planetRadiusKm,
+        frame.exposure,
         ...camera.right,
         tangentHalfFov,
         ...camera.up,
         aspect,
         ...camera.forward,
-        this.parameters.atmosphereRadiusKm,
-        ...frame.sunDirection,
-        this.parameters.sunAngularRadiusRadians,
-        ...this.parameters.solarRadianceLinear,
-        frame.exposure,
-        ...this.parameters.surfaceAlbedoLinear,
         frame.geometryDebug ? 1 : 0,
+        ...frame.sunDirection,
+        0,
+        quality.referenceViewSteps,
+        quality.referenceLightSteps,
+        quality.production ? 1 : 0,
+        frame.multipleScattering ? 1 : 0,
+        quality.skyViewSteps,
+        quality.aerialPerspectiveSteps,
+        DEBUG_VIEW_INDEX[frame.debugView],
+        frame.aerialPerspectiveSlice,
+        frame.rayleighEnabled ? 1 : 0,
+        frame.mieEnabled ? 1 : 0,
+        frame.ozoneEnabled ? 1 : 0,
+        0,
       ],
       0,
     )
 
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData)
+    this.device.queue.writeBuffer(
+      this.frameUniformBuffer,
+      0,
+      this.frameUniformData,
+    )
   }
 
   private readonly handleUncapturedError = (event: GPUUncapturedErrorEvent): void => {

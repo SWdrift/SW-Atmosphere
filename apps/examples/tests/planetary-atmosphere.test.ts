@@ -1,7 +1,40 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EARTH_STAGE_ONE } from '../src/pages/planetary-atmosphere/atmosphere/AtmosphereParameters.ts'
-import { automaticSpeedKmPerSecond } from '../src/pages/planetary-atmosphere/camera/CameraController.ts'
+import {
+  ATMOSPHERE_UNIFORM_FLOAT_COUNT,
+  EARTH_ATMOSPHERE,
+  serializeAtmosphereParameters,
+} from '../src/pages/planetary-atmosphere/atmosphere/AtmosphereParameters.ts'
+import {
+  aerialPerspectiveDistanceFromSlice,
+  aerialPerspectiveSliceFromDistance,
+  beerLambert,
+  cornetteShanksPhase,
+  exponentialDensity,
+  multiScatteringRadiusSunCosineFromUv,
+  multiScatteringUvFromRadiusSunCosine,
+  ozoneDensity,
+  rayleighPhase,
+  resolveAtmosphereLutDirtyPasses,
+  skyViewParametersFromUv,
+  skyViewUvFromParameters,
+  solarDiskPixelCoverage,
+  solarDiskSolidAngle,
+  transmittanceRadiusCosineFromUv,
+  transmittanceUvFromRadiusCosine,
+} from '../src/pages/planetary-atmosphere/atmosphere/atmospherePhysics.ts'
+import {
+  automaticSpeedKmPerSecond,
+  CAMERA_PRESETS,
+  CameraController,
+  MINIMUM_CAMERA_ALTITUDE_KM,
+} from '../src/pages/planetary-atmosphere/camera/CameraController.ts'
+import {
+  freeViewBasis,
+  freeViewFromBasis,
+  rotateFreeView,
+  type FreeView,
+} from '../src/pages/planetary-atmosphere/camera/freeViewCoordinates.ts'
 import { PlanetCamera } from '../src/pages/planetary-atmosphere/camera/PlanetCamera.ts'
 import {
   orbitAnglesFromRadial,
@@ -14,8 +47,6 @@ import {
   cameraRayDirection,
   INITIAL_CAMERA_RADIAL,
   sunDirectionFromAngles,
-  zUpForwardFromAngles,
-  zUpViewAnglesFromForward,
 } from '../src/pages/planetary-atmosphere/math/coordinates.ts'
 import { intersectRaySphere } from '../src/pages/planetary-atmosphere/math/raySphere.ts'
 import {
@@ -23,7 +54,12 @@ import {
   quaternionFromAxisAngle,
   rotateVectorByQuaternion,
 } from '../src/pages/planetary-atmosphere/math/quaternion.ts'
-import { dot, isFiniteVector, length } from '../src/pages/planetary-atmosphere/math/vector3.ts'
+import {
+  dot,
+  isFiniteVector,
+  length,
+  normalize,
+} from '../src/pages/planetary-atmosphere/math/vector3.ts'
 import {
   projectWorldDirectionToNdc,
   projectWorldPointToNdc,
@@ -96,13 +132,6 @@ test('坐标：高度、太阳方位和太阳高度角使用同一右手系', ()
 
   const zenith = sunDirectionFromAngles(0, 90)
   close(dot(zenith, [0, 0, 1]), 1)
-
-  const view = zUpViewAnglesFromForward([1, 0, 0], 0)
-  close(view.yawRadians, Math.PI / 2)
-  const reconstructed = zUpForwardFromAngles(view)
-  close(reconstructed[0], 1)
-  close(reconstructed[1], 0)
-  close(reconstructed[2], 0)
 })
 
 test('跨尺度速度：近地可精细移动，太空受明确上限约束', () => {
@@ -113,32 +142,312 @@ test('跨尺度速度：近地可精细移动，太空受明确上限约束', ()
   assert.throws(() => automaticSpeedKmPerSecond(Number.NaN))
 })
 
-test('PlanetCamera：Z-up 旋转无 roll、保持正交且移动不能穿地', () => {
+test('大气参数：GPU 序列化布局固定且只包含物理真相', () => {
+  const uniforms = serializeAtmosphereParameters(EARTH_ATMOSPHERE)
+
+  assert.equal(uniforms.length, ATMOSPHERE_UNIFORM_FLOAT_COUNT)
+  assert.equal(uniforms[0], EARTH_ATMOSPHERE.bottomRadiusKm)
+  assert.equal(uniforms[1], EARTH_ATMOSPHERE.topRadiusKm)
+  close(uniforms[2], EARTH_ATMOSPHERE.sunAngularRadiusRadians, 1e-8)
+  close(uniforms[4], EARTH_ATMOSPHERE.rayleighScatteringPerKm[0], 1e-8)
+  assert.equal(uniforms[7], EARTH_ATMOSPHERE.rayleighScaleHeightKm)
+  close(uniforms[11], EARTH_ATMOSPHERE.mieScaleHeightKm, 1e-7)
+  close(uniforms[15], EARTH_ATMOSPHERE.miePhaseG, 1e-7)
+  assert.equal(uniforms[19], EARTH_ATMOSPHERE.ozoneLayerCenterHeightKm)
+  assert.equal(uniforms[23], EARTH_ATMOSPHERE.ozoneLayerHalfWidthKm)
+  close(
+    uniforms[24],
+    EARTH_ATMOSPHERE.solarIrradianceWattsPerSquareMeterPerNm[0],
+    1e-7,
+  )
+})
+
+test('大气参数：非法半径、剖面、反照率和 scattering/extinction fail fast', () => {
+  assert.throws(() =>
+    serializeAtmosphereParameters({
+      ...EARTH_ATMOSPHERE,
+      topRadiusKm: EARTH_ATMOSPHERE.bottomRadiusKm,
+    }),
+  )
+  assert.throws(() =>
+    serializeAtmosphereParameters({
+      ...EARTH_ATMOSPHERE,
+      ozoneLayerCenterHeightKm: 95,
+    }),
+  )
+  assert.throws(() =>
+    serializeAtmosphereParameters({
+      ...EARTH_ATMOSPHERE,
+      groundAlbedoLinear: [1.1, 0.1, 0.1],
+    }),
+  )
+  assert.throws(() =>
+    serializeAtmosphereParameters({
+      ...EARTH_ATMOSPHERE,
+      mieScatteringPerKm: [0.01, 0.003996, 0.003996],
+    }),
+  )
+})
+
+test('大气密度：指数剖面和臭氧三角剖面覆盖边界', () => {
+  close(exponentialDensity(0, 8), 1)
+  close(exponentialDensity(8, 8), Math.exp(-1))
+  close(exponentialDensity(-1, 8), 1)
+  close(ozoneDensity(10, 25, 15), 0)
+  close(ozoneDensity(25, 25, 15), 1)
+  close(ozoneDensity(40, 25, 15), 0)
+  close(ozoneDensity(50, 25, 15), 0)
+  assert.throws(() => exponentialDensity(1, 0))
+  assert.throws(() => ozoneDensity(25, 25, Number.NaN))
+})
+
+test('相函数：Rayleigh 与 Cornette-Shanks 在球面积分上归一化', () => {
+  const sampleCount = 20_000
+  const step = 2 / sampleCount
+  let rayleighIntegral = 0
+  let mieIntegral = 0
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const cosine = -1 + (index + 0.5) * step
+    rayleighIntegral += rayleighPhase(cosine) * step * 2 * Math.PI
+    mieIntegral +=
+      cornetteShanksPhase(cosine, EARTH_ATMOSPHERE.miePhaseG) *
+      step *
+      2 *
+      Math.PI
+  }
+
+  close(rayleighIntegral, 1, 1e-8)
+  close(mieIntegral, 1, 1e-6)
+  assert.ok(
+    cornetteShanksPhase(1, EARTH_ATMOSPHERE.miePhaseG) >
+      cornetteShanksPhase(-1, EARTH_ATMOSPHERE.miePhaseG),
+  )
+})
+
+test('Beer-Lambert：零距离为 1，路径增长时透射率单调下降', () => {
+  assert.deepEqual(beerLambert([0.1, 0.2, 0.3], 0), [1, 1, 1])
+
+  const near = beerLambert([0.1, 0.2, 0.3], 1)
+  const far = beerLambert([0.1, 0.2, 0.3], 10)
+
+  assert.ok(far.every((component, index) => component < near[index]))
+  assert.throws(() => beerLambert([-0.1, 0.2, 0.3], 1))
+})
+
+test('太阳圆盘：使用精确球冠立体角且类太阳小角近似误差可量化', () => {
+  const radius = EARTH_ATMOSPHERE.sunAngularRadiusRadians
+  const exact = solarDiskSolidAngle(radius)
+  const smallAngle = Math.PI * radius * radius
+  const relativeError = Math.abs(smallAngle - exact) / exact
+
+  assert.ok(exact > 0)
+  assert.ok(relativeError < 2e-6)
+  assert.throws(() => solarDiskSolidAngle(0), /太阳角半径/)
+  assert.throws(() => solarDiskSolidAngle(Number.NaN), /太阳角半径/)
+})
+
+test('太阳圆盘：像素角覆盖率在物理边缘连续且保持单调', () => {
+  const radius = EARTH_ATMOSPHERE.sunAngularRadiusRadians
+  const pixelWidth = radius * 0.25
+  const distances = [
+    radius - pixelWidth,
+    radius - pixelWidth * 0.5,
+    radius,
+    radius + pixelWidth * 0.5,
+    radius + pixelWidth,
+  ]
+  const coverages = distances.map((distance) =>
+    solarDiskPixelCoverage(distance, radius, pixelWidth),
+  )
+
+  assert.deepEqual(coverages, [1, 1, 0.5, 0, 0])
+  assert.ok(
+    coverages.every(
+      (coverage, index) => index === 0 || coverage <= coverages[index - 1],
+    ),
+  )
+  assert.throws(() => solarDiskPixelCoverage(0, radius, 0), /太阳圆盘覆盖率/)
+})
+
+test('Transmittance 映射：地表到大气顶的 radius/cosine 与 UV 往返', () => {
+  const radiusSamples = [6360, 6360.1, 6380, 6420, 6459.9]
+
+  for (const radius of radiusSamples) {
+    const horizonCosine = -Math.sqrt(
+      Math.max(1 - (6360 * 6360) / (radius * radius), 0),
+    )
+    const cosineSamples = [
+      horizonCosine,
+      horizonCosine * 0.5,
+      0,
+      0.25,
+      0.8,
+      1,
+    ]
+
+    for (const cosine of cosineSamples) {
+      const uv = transmittanceUvFromRadiusCosine(6360, 6460, radius, cosine)
+      const reconstructed = transmittanceRadiusCosineFromUv(6360, 6460, uv)
+
+      close(reconstructed[0], radius, 1e-8)
+      close(reconstructed[1], cosine, 1e-8)
+    }
+  }
+})
+
+test('Multi-Scattering 映射：高度和太阳天顶余弦与 UV 往返', () => {
+  for (const radiusKm of [6360, 6360.01, 6385, 6410, 6459.99, 6460]) {
+    for (const sunCosine of [-1, -0.25, 0, 0.75, 1]) {
+      const uv = multiScatteringUvFromRadiusSunCosine(
+        6360,
+        6460,
+        radiusKm,
+        sunCosine,
+      )
+      const restored = multiScatteringRadiusSunCosineFromUv(6360, 6460, uv)
+
+      assert.ok(Math.abs(restored[0] - radiusKm) < 1e-9)
+      assert.ok(Math.abs(restored[1] - sunCosine) < 1e-9)
+    }
+  }
+
+  assert.throws(
+    () => multiScatteringUvFromRadiusSunCosine(6360, 6460, 6359, 0),
+    /物理范围/,
+  )
+  assert.throws(
+    () => multiScatteringRadiusSunCosineFromUv(6360, 6460, [Number.NaN, 0]),
+    /单位正方形/,
+  )
+})
+
+test('Sky-View 映射：地平线上下分区与方位余弦保持往返', () => {
+  const bottomRadiusKm = 6360
+  const viewRadiusKm = 6361.5
+
+  for (const u of [0, 0.1, 0.5, 0.9, 1]) {
+    for (const v of [0, 0.1, 0.35, 0.65, 0.9, 1]) {
+      const parameters = skyViewParametersFromUv(
+        bottomRadiusKm,
+        viewRadiusKm,
+        [u, v],
+      )
+      const restored = skyViewUvFromParameters(
+        bottomRadiusKm,
+        viewRadiusKm,
+        v > 0.5,
+        parameters[0],
+        parameters[1],
+      )
+
+      assert.ok(Math.abs(restored[0] - u) < 1e-7)
+      assert.ok(Math.abs(restored[1] - v) < 1e-7)
+    }
+  }
+
+  assert.throws(
+    () => skyViewParametersFromUv(bottomRadiusKm, 6359, [0.5, 0.5]),
+    /物理范围/,
+  )
+})
+
+test('Aerial Perspective 映射：平方切片覆盖零距离到射线边界', () => {
+  const boundaryDistanceKm = 1132.25
+
+  for (const slice of [0, 1 / 32, 0.25, 0.5, 0.75, 1]) {
+    const distanceKm = aerialPerspectiveDistanceFromSlice(
+      boundaryDistanceKm,
+      slice,
+    )
+    const restored = aerialPerspectiveSliceFromDistance(
+      boundaryDistanceKm,
+      distanceKm,
+    )
+
+    assert.ok(Number.isFinite(distanceKm))
+    assert.ok(Math.abs(restored - slice) < 1e-12)
+  }
+
+  assert.equal(aerialPerspectiveDistanceFromSlice(100, 0), 0)
+  assert.equal(aerialPerspectiveDistanceFromSlice(100, 1), 100)
+  assert.throws(
+    () => aerialPerspectiveSliceFromDistance(100, 101),
+    /射线边界/,
+  )
+})
+
+test('LUT dirty dependency：上游变化级联，下游局部变化不反向污染', () => {
+  const baseline = {
+    atmosphere: 'earth',
+    multipleScattering: 'earth',
+    skyView: 'height:1.5:sun:0.5',
+    aerialPerspective: 'camera-a',
+  }
+
+  assert.deepEqual(resolveAtmosphereLutDirtyPasses(baseline, baseline), {
+    transmittance: false,
+    multipleScattering: false,
+    skyView: false,
+    aerialPerspective: false,
+  })
+  assert.deepEqual(
+    resolveAtmosphereLutDirtyPasses(baseline, {
+      ...baseline,
+      atmosphere: 'no-ozone',
+    }),
+    {
+      transmittance: true,
+      multipleScattering: true,
+      skyView: true,
+      aerialPerspective: true,
+    },
+  )
+  assert.deepEqual(
+    resolveAtmosphereLutDirtyPasses(baseline, {
+      ...baseline,
+      skyView: 'height:20:sun:0.5',
+    }),
+    {
+      transmittance: false,
+      multipleScattering: false,
+      skyView: true,
+      aerialPerspective: false,
+    },
+  )
+  assert.deepEqual(
+    resolveAtmosphereLutDirtyPasses(baseline, {
+      ...baseline,
+      aerialPerspective: 'camera-b',
+    }),
+    {
+      transmittance: false,
+      multipleScattering: false,
+      skyView: false,
+      aerialPerspective: true,
+    },
+  )
+})
+
+test('PlanetCamera：姿态保持正交且移动不能穿地', () => {
   const minimumRadius =
-    EARTH_STAGE_ONE.planetRadiusKm + EARTH_STAGE_ONE.minimumCameraAltitudeKm
+    EARTH_ATMOSPHERE.bottomRadiusKm + MINIMUM_CAMERA_ALTITUDE_KM
   const camera = new PlanetCamera(
-    [0, 0, EARTH_STAGE_ONE.planetRadiusKm + 1],
+    [0, 0, EARTH_ATMOSPHERE.bottomRadiusKm + 1],
     [0, 1, 0],
     [0, 0, 1],
     60,
   )
 
-  camera.setZUpView({
-    yawRadians: 0.4,
-    pitchRadians: (80 * Math.PI) / 180,
-  })
+  camera.setPose(camera.position, [0.3, 0.9, 0.2], [-0.2, 0.1, 1])
   close(length(camera.forward), 1)
   close(length(camera.right), 1)
   close(length(camera.up), 1)
   close(dot(camera.forward, camera.right), 0, 1e-8)
-  close(dot(camera.right, [0, 0, 1]), 0, 1e-8)
-  assert.ok(
-    Math.abs(dot(camera.forward, [0, 0, 1])) <=
-      Math.sin((89 * Math.PI) / 180) + 1e-9,
-  )
+  close(dot(camera.up, camera.forward), 0, 1e-8)
   assert.ok(isFiniteVector(camera.forward))
   assert.throws(() =>
-    camera.setZUpView({ yawRadians: 0, pitchRadians: Math.PI / 2 }),
+    camera.setPose(camera.position, [0, Number.NaN, 0], [0, 0, 1]),
   )
 
   const forwardBeforeMove = camera.forward
@@ -146,8 +455,8 @@ test('PlanetCamera：Z-up 旋转无 roll、保持正交且移动不能穿地', (
 
   camera.move(
     [0, 0, -100],
-    EARTH_STAGE_ONE.planetRadiusKm,
-    EARTH_STAGE_ONE.minimumCameraAltitudeKm,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+    MINIMUM_CAMERA_ALTITUDE_KM,
   )
   close(length(camera.position), minimumRadius, 1e-8)
   assert.ok(isFiniteVector(camera.position))
@@ -158,7 +467,7 @@ test('PlanetCamera：Z-up 旋转无 roll、保持正交且移动不能穿地', (
 
 test('PlanetCamera：高速移动不能穿过行星，接触后保留切向移动', () => {
   const minimumRadius =
-    EARTH_STAGE_ONE.planetRadiusKm + EARTH_STAGE_ONE.minimumCameraAltitudeKm
+    EARTH_ATMOSPHERE.bottomRadiusKm + MINIMUM_CAMERA_ALTITUDE_KM
   const camera = new PlanetCamera(
     [minimumRadius + 1, 0, 0],
     [-1, 0, 0],
@@ -168,8 +477,8 @@ test('PlanetCamera：高速移动不能穿过行星，接触后保留切向移�
 
   camera.move(
     [-minimumRadius * 3, 10, 0],
-    EARTH_STAGE_ONE.planetRadiusKm,
-    EARTH_STAGE_ONE.minimumCameraAltitudeKm,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+    MINIMUM_CAMERA_ALTITUDE_KM,
   )
 
   assert.ok(length(camera.position) >= minimumRadius - 1e-8)
@@ -178,7 +487,7 @@ test('PlanetCamera：高速移动不能穿过行星，接触后保留切向移�
 })
 
 test('PlanetCamera：正视球心时仍能构造稳定的 right/up', () => {
-  const radius = EARTH_STAGE_ONE.planetRadiusKm + 400
+  const radius = EARTH_ATMOSPHERE.bottomRadiusKm + 400
   const camera = new PlanetCamera(
     [0, 0, radius],
     [0, 0, -1],
@@ -194,17 +503,44 @@ test('PlanetCamera：正视球心时仍能构造稳定的 right/up', () => {
   assert.ok(isFiniteVector(camera.up))
 })
 
-test('Z-up 视角：偏航跨越 ±180° 时方向连续', () => {
-  const beforeWrap = zUpForwardFromAngles({
-    yawRadians: (179.9 * Math.PI) / 180,
-    pitchRadians: 0.3,
-  })
-  const afterWrap = zUpForwardFromAngles({
-    yawRadians: (-179.9 * Math.PI) / 180,
-    pitchRadians: 0.3,
-  })
+test('斜向切线预设：屏幕中的行星切线稳定倾斜 45°', () => {
+  const camera = new PlanetCamera(
+    [0, 0, EARTH_ATMOSPHERE.bottomRadiusKm + 20],
+    [1, 0, 0],
+    [0, 0, 1],
+    60,
+  )
+  const controller = new CameraController(
+    {} as HTMLCanvasElement,
+    camera,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+  )
 
-  assert.ok(dot(beforeWrap, afterWrap) > 0.99999)
+  controller.applyPreset('tilted-tangent')
+
+  const preset = CAMERA_PRESETS.find(
+    (candidate) => candidate.id === 'tilted-tangent',
+  )
+  assert.ok(preset)
+  assert.equal(preset.rollDegrees, 45)
+
+  const radialToPlanetCenter = normalize([
+    -camera.position[0],
+    -camera.position[1],
+    -camera.position[2],
+  ])
+  const screenNormal = [
+    dot(radialToPlanetCenter, camera.right),
+    dot(radialToPlanetCenter, camera.up),
+  ]
+  const tangentAngleRadians =
+    Math.atan2(screenNormal[1], screenNormal[0]) + Math.PI / 2
+  const normalizedTangentAngle = Math.atan2(
+    Math.sin(tangentAngleRadians),
+    Math.cos(tangentAngleRadians),
+  )
+
+  close(Math.abs(normalizedTangentAngle), Math.PI / 4)
 })
 
 test('四元数旋转：跨越极点不退化并保持单位长度', () => {
@@ -216,6 +552,47 @@ test('四元数旋转：跨越极点不退化并保持单位长度', () => {
   close(rotated[1], -1)
   close(rotated[2], 0)
   close(length(rotated), 1)
+})
+
+test('自由摄像机：鼠标沿滚转后的视口轴旋转且不修改滚转角', () => {
+  const view: FreeView = {
+    yawRadians: 0,
+    pitchRadians: 0,
+    rollRadians: Math.PI / 3,
+  }
+  const basis = freeViewBasis(view)
+  const rotated = rotateFreeView(view, [1e-5, 0, 0])
+  const rotatedBasis = freeViewBasis(rotated)
+  const forwardDelta = normalize([
+    rotatedBasis.forward[0] - basis.forward[0],
+    rotatedBasis.forward[1] - basis.forward[1],
+    rotatedBasis.forward[2] - basis.forward[2],
+  ])
+
+  close(dot(forwardDelta, basis.up), 1, 1e-5)
+  close(rotated.rollRadians, view.rollRadians)
+  close(dot(rotatedBasis.forward, rotatedBasis.right), 0, 1e-9)
+  close(dot(rotatedBasis.forward, rotatedBasis.up), 0, 1e-9)
+})
+
+test('自由摄像机：世界 Z 极点前限制 pitch 并保留本地滚转', () => {
+  let view: FreeView = {
+    yawRadians: 0,
+    pitchRadians: 0,
+    rollRadians: Math.PI / 4,
+  }
+
+  for (let index = 0; index < 400; index += 1) {
+    view = rotateFreeView(view, [0.01, 0, 0])
+    const basis = freeViewBasis(view)
+
+    assert.ok(isFiniteVector(basis.forward))
+    assert.ok(isFiniteVector(basis.right))
+    assert.ok(isFiniteVector(basis.up))
+    close(view.rollRadians, Math.PI / 4)
+  }
+
+  close(view.pitchRadians, CAMERA_PITCH_LIMIT_RADIANS)
 })
 
 test('Orbit：turntable 在极点前停止，方位角仍连续', () => {
@@ -233,15 +610,16 @@ test('Orbit：turntable 在极点前停止，方位角仍连续', () => {
 
 test('自由摄像机：局部 forward 经四元数转换后在全局坐标中移动', () => {
   const camera = new PlanetCamera([0, 0, 7000], [0, 1, 0], [0, 0, 1], 60)
-
-  camera.setZUpView({
-    yawRadians: Math.PI / 2,
-    pitchRadians: Math.PI / 5,
+  const basis = freeViewBasis({
+    yawRadians: 0.6,
+    pitchRadians: 0.4,
+    rollRadians: Math.PI / 3,
   })
+  camera.setPose(camera.position, basis.forward, basis.up)
 
   const positionBeforeMove = camera.position
   const globalForward = camera.forward
-  camera.move(globalForward, EARTH_STAGE_ONE.planetRadiusKm, 0.01)
+  camera.move(globalForward, EARTH_ATMOSPHERE.bottomRadiusKm, 0.01)
 
   close(camera.position[0] - positionBeforeMove[0], globalForward[0])
   close(camera.position[1] - positionBeforeMove[1], globalForward[1])
@@ -249,6 +627,68 @@ test('自由摄像机：局部 forward 经四元数转换后在全局坐标中�
   close(length(camera.forward), 1)
   close(dot(camera.forward, camera.right), 0)
   close(dot(camera.forward, camera.up), 0)
+})
+
+test('自由摄像机：横滚时 WASD 跟随局部基，Q/E 只改变本地横滚', () => {
+  const camera = new PlanetCamera([0, 0, 100_000], [0, 1, 0], [0, 0, 1], 60)
+  const initialBasis = freeViewBasis({
+    yawRadians: 0,
+    pitchRadians: 0,
+    rollRadians: Math.PI / 3,
+  })
+  camera.setPose(camera.position, initialBasis.forward, initialBasis.up)
+  const controller = new CameraController(
+    {} as HTMLCanvasElement,
+    camera,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+  )
+  const controls = controller as unknown as {
+    pressedKeys: Set<string>
+    updateFreeFlight(deltaSeconds: number): void
+  }
+
+  controls.pressedKeys.add('KeyD')
+  const positionBeforeRight = camera.position
+  controls.updateFreeFlight(1)
+  const rightDisplacement = [
+    camera.position[0] - positionBeforeRight[0],
+    camera.position[1] - positionBeforeRight[1],
+    camera.position[2] - positionBeforeRight[2],
+  ] as const
+
+  close(dot(normalize(rightDisplacement), camera.right), 1, 1e-9)
+
+  const rollCamera = new PlanetCamera(
+    [0, 0, 100_000],
+    [0, 1, 0],
+    [0, 0, 1],
+    60,
+  )
+  const rollController = new CameraController(
+    {} as HTMLCanvasElement,
+    rollCamera,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+  )
+  const rollControls = rollController as unknown as {
+    pressedKeys: Set<string>
+    freeView: FreeView
+    updateFreeFlight(deltaSeconds: number): void
+  }
+  const positionBeforeRoll = rollCamera.position
+  const forwardBeforeRoll = rollCamera.forward
+  const upBeforeRoll = rollCamera.up
+
+  rollControls.pressedKeys.add('KeyE')
+  rollControls.updateFreeFlight(1)
+
+  assert.deepEqual(rollCamera.position, positionBeforeRoll)
+  close(dot(rollCamera.forward, forwardBeforeRoll), 1, 1e-9)
+  assert.ok(dot(rollCamera.up, upBeforeRoll) < 0.9)
+  close(rollControls.freeView.rollRadians, 0.8)
+  close(
+    freeViewFromBasis(rollCamera.forward, rollCamera.up).rollRadians,
+    rollControls.freeView.rollRadians,
+  )
 })
 
 test('调试 overlay 投影：使用全局点并正确剔除相机后方', () => {

@@ -28,20 +28,26 @@
 - `AtmosphereParameters` 是物理参数唯一来源；TS、WGSL、Reference、Production 和 UI 只消费同一份定义及其序列化布局。
 - CPU/GPU 长度统一使用 km；UI 角度使用 degree，数学与 WGSL 使用 radian。
 - 世界空间固定为右手 Z-up 笛卡尔坐标：`+X` 右、`+Y` 前、`+Z` 上，行星中心为原点。
-- 相机局部基为 `+X` right、`+Y` forward、`+Z` up；`PlanetCamera` 单位四元数是姿态唯一真相。
-- Free yaw/pitch、Orbit 方位/仰角/半径、太阳世界方向分别拥有独立状态，只在模式边界显式转换。
+- 相机局部基为 `+X` right、`+Y` forward、`+Z` up；`PlanetCamera` 单位四元数是最终渲染姿态的唯一真相。
+- Free 控制状态只保存世界参考 yaw/pitch 和独立 local-forward 滚转角；由受限 yaw/pitch 构造无滚转父基 `B₀`，最终基固定为 `B = B₀Rroll`。鼠标输入按当前 roll 旋回父控制平面后更新 yaw/pitch；世界 `±Z` 是 z1 极点，必须在更新控制角时把 pitch 限制为 ±89°，禁止先旋转越过 z1 再从 forward 事后反解或限幅。Q/E 只修改 `Rroll` 且不控制升降。Orbit 方位/仰角/半径和太阳世界方向保留独立状态。
+- Free 的 WASD 速度状态保存为相机局部分量，每帧使用当前相机基转换为世界位移；姿态变化不得遗留旧世界方向的速度。
 - 真相无法构建时 fail fast，不用 `||`、`??` 或隐式默认值制造替代状态。
 
 ### 渲染边界
 
 - 行星和大气是同心球壳；地表、大气内部、轨道和深空共用一套相交与辐射模型。
+- 星球、太阳、大气、世界 XYZ 网格和天空经纬方向均以世界空间为权威定义；摄像机只派生世界到屏幕的观察变换。GPU camera-relative 坐标只允许平移数值原点，不得改变世界轴或成为第二份场景真相。
 - 每像素视线由全屏三角形与摄像机基重建；禁止用天空盒、渐变背景、二维圆或固定高度平面实现大气。
 - 天空经纬 debug 只是独立的无限远方向 overlay，不得进入大气模型或被描述为天空盒实现。
 - CPU 世界位置使用 JavaScript `number`；GPU 使用相机相对行星中心，避免星球尺度 f32 精度损失。
 - 物理计算保持 HDR 线性 RGB，最终合成后只执行一次 exposure 与 tone mapping。
 - Reference 与 Production 共享密度、相函数、遮挡、参数、单位、坐标映射和颜色管理。
+- Rayleigh 与 Cornette-Shanks 相函数均按全立体角积分为 1；太阳辐照度到太阳圆盘辐亮度的立体角换算只发生一次，不得重复引入 `1/(4π)` 或太阳立体角因子。
+- Reference 与 Production 只在相同物理参数和相同散射阶数下比较：先关闭多重散射比较单次散射，再单独评估多重散射贡献。
 - Production 依赖顺序固定为 Parameters → Transmittance → Multi-Scattering → Sky-View → Aerial Perspective 3D → Final。
-- Aerial Perspective 必须使用 `texture_3d`；ozone 只吸收；多重散射不得用常量环境光替代。
+- Sky-View 只服务大气内观察者；相机位于大气外时使用逐像素积分或等价的大气外路径，不强行复用大气内映射。
+- Aerial Perspective 必须分别表达 RGB 入射散射辐亮度和 RGB 透射率，默认使用两个 `texture_3d`；最终组合固定为 `sceneRadiance × transmittance + inScatteredRadiance`。
+- ozone 只吸收；多重散射不得用常量环境光替代。
 
 ### 工程与验证
 
@@ -64,79 +70,24 @@
 
 ## Task Board
 
-### 共享物理核心与 Reference
+### 当前执行
 
-- [ ] 交叉核对指定论文、文档、测试和配套实现，建立公式/章节/源码出处表。
-- [ ] 集中定义类地球参数、物理意义、单位、来源、范围和 LUT 失效依赖。
-- [ ] 实现共享 Rayleigh、Mie scattering/extinction、Cornette-Shanks、ozone absorption、density profile、optical depth 与 Beer-Lambert。
-- [ ] 测试高度/半径、density profile、相函数、映射往返及极端输入无 NaN/Infinity。
-- [ ] 实现可配置 Reference 视线/太阳路径积分、行星阴影、地表、太阳圆盘和 HDR 合成。
-- [ ] 建立 Ground noon、sunset、twilight 与 space limb 固定 Reference 基准。
+- [ ] 使用 `斜向晨昏线` 固定场景完成用户侧验收：关闭 XYZ overlay，对照 Medium Final、Aerial L 与 Aerial T，并覆盖 20°/60°/100° 垂直 FOV、Low/Medium/High、静止与缓慢滚转。
+- [ ] 比较 Reference、Production 与 Multi-Scattering debug 的 HDR 数值和显示结果，区分散射阶数差异与曝光问题；禁止修改物理参数或 LUT 输出补偿亮度。
+- [ ] 为 Ground noon、sunset、twilight、space limb 建立亮度、太阳覆盖率和散射开关语义验证。
+- [ ] 建立 Reference/Production 固定像素或低分辨率误差比较及合理阈值。
+- [ ] 在目标设备实测 1080p FPS、GPU 帧时间、LUT 重建频率和瓶颈；不支持 `timestamp-query` 时只报告 CPU submit。
+- [ ] 运行当前工作区的 `pnpm check:quick`、回归测试与构建，并完成 WebGPU validation、shader、固定场景和 LUT debug 复查。
+- [ ] 核对最终完成标准，明确报告未验证项。
 
-### Production LUT
+### 残留问题响应
 
-- [ ] 建立集中管理的 compute/render pipeline、资源生命周期、参数上传和 dirty dependency。
-- [ ] 实现 Transmittance LUT 与非线性 `(r, mu)` 映射、地表遮挡和 UV 往返测试。
-- [ ] 实现 Hillaire Multi-Scattering LUT，记录参数化、方向样本、迭代策略并支持关闭比较。
-- [ ] 实现地平线高精度、地表/大气/太空连续的 Sky-View LUT。
-- [ ] 实现真正的 Aerial Perspective `texture_3d`、非线性距离切片和 slice debug。
-- [ ] 实现太空、太阳、天空、大气边缘、地表、夜侧和 `scene × T + L` final composition。
-- [ ] 检测 HDR 浮点纹理 optional feature 并提供经过验证的兼容路径。
+- [ ] 若固定场景仍有边界伪影，先记录 Final/Aerial L/Aerial T、FOV、DPR、质量档及运动表现，确认是否仍绑定 froxel 网格。
+- [ ] 修复前测量边界像素比例与 GPU pass；不先采用全屏逐像素积分、扩大 3D LUT、整屏模糊或曝光补偿。
 
-### 调试、质量与最终验收
+## 当前验收边界
 
-- [ ] 完成物理开关、质量档、LUT 预览、density、pass 时间和 dirty 状态调试面板。
-- [ ] 实现 Low / Medium / High / Reference 四档及完整视觉预设。
-- [ ] 支持 `timestamp-query` 时测 GPU pass；不支持时只报告 CPU submit。
-- [ ] 建立 Reference/Production 固定像素或低分辨率误差比较与合理阈值。
-- [ ] 实测目标设备 1080p FPS、帧时间、LUT 重建频率与瓶颈。
-- [ ] README 补全物理公式、LUT 数据流、内存布局、性能、误差和平台迁移边界。
-- [ ] 最终逐项核对 12 条完成标准，运行 build/test/GPU/视觉验证并报告全部缺项。
-
-## Next Implementation Plan
-
-### 架构前置
-
-1. WGSL 只保留一个受版本控制的权威路径：renderer、README 和验证均使用 `atmosphere/shaders/`。
-2. 将 `StageOneAtmosphereParameters` 收口为完整物理参数真相。只存底部/顶部半径、散射与消光系数、密度剖面、相函数参数、吸收、地表反照率和太阳量；`atmosphereTopHeightKm` 等可推导量不重复存储，摄像机初始高度和最低高度移回摄像机边界。
-3. 物理参数使用独立 uniform buffer，仅在参数变更时上传并触发 LUT dirty chain；相机、太阳方向、曝光和调试状态留在逐帧 buffer。布局常量与序列化只在参数模块定义一次。
-4. 当前不重构 `CameraController`、`DebugOverlay` 或 Vue 页面。它们不进入大气物理调用链；除非后续改动直接加重其职责，否则保持阶段一边界。
-5. WGSL 暂用一个可独立校验的模块，以清晰分区组织共享函数和多个 entry point。WGSL 没有标准 include，在没有可验证组合工具前不拆成需要字符串拼接的 shader 片段，也不复制物理公式。
-6. `AtmosphereRenderer` 继续作为 WebGPU 设备、资源生命周期和 pass 顺序的唯一协调器；不预先建立 class-per-pass。资源字段明显成组或 Production pass 已造成不同变化原因时，再提取有真实生命周期边界的资源对象。
-
-### 着色器顺序
-
-1. 参数与布局：确定类地球参数来源、合法范围、TS/WGSL 对齐和序列化测试；非法参数在创建 renderer 前 fail fast。
-2. 共享物理核：实现安全球面距离、Rayleigh/Mie/ozone density、scattering/extinction、Rayleigh 与 Cornette-Shanks phase、optical depth 和 Beer-Lambert。
-3. Reference：先在现有全屏 pass 中做可配置视线/太阳路径直接积分，完成行星阴影、地表、太阳圆盘和唯一一次 tone mapping；此阶段不创建 LUT。
-4. Reference 基准：固化 ground noon、sunset、twilight、space limb 的参数、相机和太阳状态，并覆盖 profile、phase、极端高度及无 NaN/Infinity 测试。
-5. Production：Reference 门槛通过后，依次加入 Transmittance、Multi-Scattering、Sky-View、Aerial Perspective 3D 和 Final；每加入一项就提供独立 debug 与 Reference 对照，不并行铺开全部 pass。
-
-### 资料定位
-
-| 实现问题 | 首要依据 |
-| --- | --- |
-| 边界距离、地表遮挡、Beer-Lambert、数值保护 | Bruneton 2017 `functions.glsl` 的 Transmittance 与 utility functions |
-| density profile、ozone、量纲和测试方式 | Bruneton 2017 `definitions.glsl`、`functions_test.cc`、reference 实现 |
-| Production pass 与参数化 | Hillaire 2020 §5.2 Transmittance、§5.3 Sky-View、§5.4 Aerial Perspective、§5.5 Multiple Scattering |
-| 论文未展开的 pass 细节 | `UnrealEngineSkyAtmosphere/RenderSkyRayMarching.hlsl` |
-| 最终 `scene × T + L` 组合与地空连续 | Bruneton 2017 rendering functions 与 Hillaire 2020 final rendering |
-
-## Stage One Baseline
-
-- 页面、路由、模块边界和 README 已建立；Vue 只负责 canvas、生命周期和调试 UI。
-- 全屏三角形完成世界射线重建、球交、行星轮廓、大气区间分类、Lambert 地表、太阳方向/圆盘、线性 HDR 与一次 tone mapping。
-- Free 使用世界 Z-up、无 roll yaw/pitch；Orbit 使用 Z-up turntable；位置 sweep 防止高速穿地。
-- 已实现跨尺度速度、预设、Pointer Lock 清理、resize、shader 诊断、validation、device lost 与卸载。
-- 全局 XYZ 平面网格和无限远天空经纬网格均为独立 2D overlay。
-- 用户在实际浏览器持续验证并提供输入日志；Pointer Lock 跳变被定位为异常相对位移并加入过滤与探针。
-- `pnpm --filter examples test`：14/14 通过。
-- `pnpm --filter examples build`：通过，包含 `vue-tsc -b`；Vite 成功生成生产产物。
-- lint 未配置；浏览器、GPU 型号、分辨率和阶段一性能数字未记录，不得补造。
-
-## Required Sources
-
-- Maxime Heckel: <https://blog.maximeheckel.com/posts/on-rendering-the-sky-sunsets-and-planets/>
-- Bruneton and Neyret 2008: <https://inria.hal.science/inria-00288758/document>
-- Bruneton 2017: <https://ebruneton.github.io/precomputed_atmospheric_scattering/> and <https://github.com/ebruneton/precomputed_atmospheric_scattering>
-- Hillaire 2020: <https://sebh.github.io/publications/egsr2020.pdf> and <https://github.com/sebh/UnrealEngineSkyAtmosphere>
+- 默认地表日间应清晰可读，sunset、twilight 和夜侧仍保持亮度层级，不允许全局抬黑或固定环境光。
+- Reference 与 Production 的差异只能来自散射阶数或已知近似；不得存在隐藏曝光、重复太阳因子或路径专属补偿。
+- 太阳圆盘需在不同分辨率、FOV 和缓慢运动下保持物理角尺寸、稳定圆形和连续边缘，并在大气内接受透射衰减。
+- 用户原始斜向近地视角不得出现可辨识的阶梯、froxel 亮斑、地表/天空互染或运动闪烁；边界修复不得改变远离轮廓的 HDR 结果。

@@ -11,7 +11,7 @@ export const examplePages = [
   },
   {
     path: '/planetary-atmosphere',
-    name: '行星大气实验',
+    name: '大气实验',
     component: PlanetaryAtmosphere,
   },
 ] as const

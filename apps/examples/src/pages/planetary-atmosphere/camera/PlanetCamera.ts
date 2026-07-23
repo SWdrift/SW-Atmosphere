@@ -1,10 +1,4 @@
-import {
-  CAMERA_PITCH_LIMIT_RADIANS,
-  localUpFromPosition,
-  WORLD_UP,
-  zUpForwardFromAngles,
-  type ZUpViewAngles,
-} from '../math/coordinates.ts'
+import { localUpFromPosition } from '../math/coordinates.ts'
 import {
   isUnitQuaternion,
   quaternionFromBasis,
@@ -68,19 +62,6 @@ export class PlanetCamera {
     }
 
     this.verticalFovDegrees = degrees
-  }
-
-  setZUpView(angles: ZUpViewAngles): void {
-    if (
-      !Number.isFinite(angles.yawRadians) ||
-      !Number.isFinite(angles.pitchRadians) ||
-      Math.abs(angles.pitchRadians) > CAMERA_PITCH_LIMIT_RADIANS
-    ) {
-      throw new Error('Z-up 视角必须使用有限偏航角，俯仰角必须位于 ±89°。')
-    }
-
-    this.setOrientation(zUpForwardFromAngles(angles), WORLD_UP)
-    this.assertFinite()
   }
 
   move(displacementKm: Vec3, planetRadiusKm: number, minimumAltitudeKm: number): void {

@@ -1,11 +1,7 @@
-import type { StageOneAtmosphereParameters } from '../atmosphere/AtmosphereParameters.ts'
 import {
   altitudeFromPosition,
-  CAMERA_PITCH_LIMIT_RADIANS,
   INITIAL_CAMERA_RADIAL,
   WORLD_UP,
-  zUpViewAnglesFromForward,
-  type ZUpViewAngles,
 } from '../math/coordinates.ts'
 import {
   add,
@@ -18,6 +14,13 @@ import {
   type Vec3,
 } from '../math/vector3.ts'
 import {
+  freeViewBasis,
+  freeViewFromBasis,
+  rollFreeView,
+  rotateFreeView,
+  type FreeView,
+} from './freeViewCoordinates.ts'
+import {
   orbitAnglesFromRadial,
   orbitRadialFromAngles,
   rotateOrbitAngles,
@@ -27,12 +30,59 @@ import { PlanetCamera } from './PlanetCamera.ts'
 
 export type CameraMode = 'free' | 'orbit'
 
+export const INITIAL_CAMERA_ALTITUDE_KM = 1.5
+export const MINIMUM_CAMERA_ALTITUDE_KM = 0.01
+
 export const CAMERA_PRESETS = [
-  { id: 'surface', label: '地表', altitudeKm: 1.5, view: 'tangent' },
-  { id: 'twenty-km', label: '20 km', altitudeKm: 20, view: 'tangent' },
-  { id: 'karman-line', label: '100 km', altitudeKm: 100, view: 'planet' },
-  { id: 'low-orbit', label: '低轨', altitudeKm: 400, view: 'planet' },
-  { id: 'deep-space', label: '深空', altitudeKm: 30_000, view: 'planet' },
+  {
+    id: 'surface',
+    label: '地表',
+    altitudeKm: INITIAL_CAMERA_ALTITUDE_KM,
+    view: 'tangent',
+    rollDegrees: 0,
+  },
+  {
+    id: 'twenty-km',
+    label: '20 km',
+    altitudeKm: 20,
+    view: 'tangent',
+    rollDegrees: 0,
+  },
+  {
+    id: 'tilted-tangent',
+    label: '斜向切线 45°',
+    altitudeKm: 20,
+    view: 'tangent',
+    rollDegrees: 45,
+  },
+  {
+    id: 'karman-line',
+    label: '100 km',
+    altitudeKm: 100,
+    view: 'planet',
+    rollDegrees: 0,
+  },
+  {
+    id: 'low-orbit',
+    label: '低轨',
+    altitudeKm: 400,
+    view: 'planet',
+    rollDegrees: 0,
+  },
+  {
+    id: 'space-limb',
+    label: '太空边缘',
+    altitudeKm: 400,
+    view: 'limb',
+    rollDegrees: 0,
+  },
+  {
+    id: 'deep-space',
+    label: '深空',
+    altitudeKm: 30_000,
+    view: 'planet',
+    rollDegrees: 0,
+  },
 ] as const
 
 export type CameraPresetId = (typeof CAMERA_PRESETS)[number]['id']
@@ -44,12 +94,12 @@ interface ViewProbeSnapshot {
   forward: Vec3
   right: Vec3
   up: Vec3
-  freeView: ZUpViewAngles
+  freeRollRadians: number
   orbitAngles: OrbitAngles
 }
 
 interface ViewProbeInput {
-  source: 'free-mouse' | 'orbit-pointer' | 'orbit-keyboard' | 'mode' | 'preset'
+  source: 'free-mouse' | 'free-keyboard' | 'orbit-pointer' | 'orbit-keyboard' | 'mode' | 'preset'
   movementX: number
   movementY: number
   timestamp: number
@@ -72,13 +122,14 @@ export class CameraController {
   targetSpeedKmPerSecond = 0
 
   private readonly canvas: HTMLCanvasElement
-  private readonly parameters: StageOneAtmosphereParameters
+  private readonly planetRadiusKm: number
   private readonly pressedKeys = new Set<string>()
-  private velocityKmPerSecond: Vec3 = [0, 0, 0]
+  private localVelocityKmPerSecond: Vec3 = [0, 0, 0]
+  private pendingFreeLookRotationRadians: Vec3 = [0, 0, 0]
+  private freeView: FreeView
   private attached = false
   private orbitDragging = false
   private discardNextLockedPointerMove = false
-  private freeView: ZUpViewAngles = { yawRadians: 0, pitchRadians: 0 }
   private orbitAngles: OrbitAngles = {
     azimuthRadians: 0,
     elevationRadians: 0,
@@ -92,12 +143,16 @@ export class CameraController {
   constructor(
     canvas: HTMLCanvasElement,
     camera: PlanetCamera,
-    parameters: StageOneAtmosphereParameters,
+    planetRadiusKm: number,
   ) {
+    if (!Number.isFinite(planetRadiusKm) || planetRadiusKm <= 0) {
+      throw new Error('摄像机控制器的行星半径必须是有限正数。')
+    }
+
     this.canvas = canvas
     this.camera = camera
-    this.parameters = parameters
-    this.initializeFreeViewFromCamera()
+    this.planetRadiusKm = planetRadiusKm
+    this.freeView = freeViewFromBasis(camera.forward, camera.up)
     this.initializeOrbitFromCamera()
   }
 
@@ -169,7 +224,7 @@ export class CameraController {
     }
 
     this.initializeFreeViewFromCamera()
-    this.camera.setZUpView(this.freeView)
+    this.applyFreeView()
   }
 
   setSpeedExponent(exponent: number): void {
@@ -187,12 +242,36 @@ export class CameraController {
       throw new Error(`未知摄像机预设：${id}`)
     }
 
-    const radius = this.parameters.planetRadiusKm + preset.altitudeKm
+    const radius = this.planetRadiusKm + preset.altitudeKm
     const position = scale(INITIAL_CAMERA_RADIAL, radius)
-    const forward: Vec3 =
-      preset.view === 'tangent' ? [1, 0, 0] : scale(INITIAL_CAMERA_RADIAL, -1)
+    let forward: Vec3
+    let up = WORLD_UP
 
-    this.camera.setPose(position, forward, WORLD_UP)
+    if (preset.view === 'tangent') {
+      forward = [1, 0, 0]
+    } else if (preset.view === 'limb') {
+      forward = [
+        0,
+        Math.sqrt(1 - (this.planetRadiusKm / radius) ** 2),
+        this.planetRadiusKm / radius,
+      ]
+    } else {
+      forward = scale(INITIAL_CAMERA_RADIAL, -1)
+    }
+
+    if (preset.rollDegrees !== 0) {
+      const rollRadians = (preset.rollDegrees * Math.PI) / 180
+      const baseRight = normalize(projectOntoPlane(
+        INITIAL_CAMERA_RADIAL,
+        forward,
+      ))
+      up = add(
+        scale(baseRight, Math.sin(rollRadians)),
+        scale(WORLD_UP, Math.cos(rollRadians)),
+      )
+    }
+
+    this.camera.setPose(position, forward, up)
     this.viewProbeInputBudgetRadians = 0
     this.lastViewProbeInput = {
       source: 'preset',
@@ -200,15 +279,13 @@ export class CameraController {
       movementY: 0,
       timestamp: performance.now(),
     }
-    this.velocityKmPerSecond = [0, 0, 0]
+    this.localVelocityKmPerSecond = [0, 0, 0]
     this.actualSpeedKmPerSecond = 0
     this.initializeFreeViewFromCamera()
     this.initializeOrbitFromCamera()
 
     if (this.mode === 'orbit') {
       this.applyOrbitPose()
-    } else {
-      this.camera.setZUpView(this.freeView)
     }
   }
 
@@ -232,9 +309,45 @@ export class CameraController {
   }
 
   private updateFreeFlight(deltaSeconds: number): void {
+    const rollSpeedRadiansPerSecond = 0.8
+    let rollDeltaRadians = 0
+
+    if (this.pressedKeys.has('KeyQ')) {
+      rollDeltaRadians -= rollSpeedRadiansPerSecond * deltaSeconds
+    }
+    if (this.pressedKeys.has('KeyE')) {
+      rollDeltaRadians += rollSpeedRadiansPerSecond * deltaSeconds
+    }
+
+    const hasLookRotation =
+      length(this.pendingFreeLookRotationRadians) > 1e-12
+
+    if (hasLookRotation) {
+      this.freeView = rotateFreeView(
+        this.freeView,
+        this.pendingFreeLookRotationRadians,
+      )
+      this.pendingFreeLookRotationRadians = [0, 0, 0]
+    }
+
+    if (rollDeltaRadians !== 0) {
+      this.freeView = rollFreeView(this.freeView, rollDeltaRadians)
+      this.viewProbeInputBudgetRadians += Math.abs(rollDeltaRadians)
+      this.lastViewProbeInput = {
+        source: 'free-keyboard',
+        movementX: rollDeltaRadians,
+        movementY: 0,
+        timestamp: performance.now(),
+      }
+    }
+
+    if (hasLookRotation || rollDeltaRadians !== 0) {
+      this.applyFreeView()
+    }
+
     const altitudeKm = altitudeFromPosition(
       this.camera.position,
-      this.parameters.planetRadiusKm,
+      this.planetRadiusKm,
     )
     const speedModifier =
       (this.pressedKeys.has('ShiftLeft') || this.pressedKeys.has('ShiftRight') ? 4 : 1) *
@@ -245,44 +358,58 @@ export class CameraController {
     this.targetSpeedKmPerSecond =
       automaticSpeedKmPerSecond(altitudeKm) * 2 ** this.speedExponent * speedModifier
 
-    let desiredDirection: Vec3 = [0, 0, 0]
+    let desiredLocalDirection: Vec3 = [0, 0, 0]
 
-    if (this.pressedKeys.has('KeyW')) desiredDirection = add(desiredDirection, this.camera.forward)
-    if (this.pressedKeys.has('KeyS')) desiredDirection = add(desiredDirection, scale(this.camera.forward, -1))
-    if (this.pressedKeys.has('KeyD')) desiredDirection = add(desiredDirection, this.camera.right)
-    if (this.pressedKeys.has('KeyA')) desiredDirection = add(desiredDirection, scale(this.camera.right, -1))
-    if (this.pressedKeys.has('KeyE')) desiredDirection = add(desiredDirection, WORLD_UP)
-    if (this.pressedKeys.has('KeyQ')) desiredDirection = add(desiredDirection, scale(WORLD_UP, -1))
+    if (this.pressedKeys.has('KeyW')) desiredLocalDirection = add(desiredLocalDirection, [0, 1, 0])
+    if (this.pressedKeys.has('KeyS')) desiredLocalDirection = add(desiredLocalDirection, [0, -1, 0])
+    if (this.pressedKeys.has('KeyD')) desiredLocalDirection = add(desiredLocalDirection, [1, 0, 0])
+    if (this.pressedKeys.has('KeyA')) desiredLocalDirection = add(desiredLocalDirection, [-1, 0, 0])
 
-    const hasMovementInput = length(desiredDirection) > 1e-12
-    const desiredVelocity = hasMovementInput
-      ? scale(normalize(desiredDirection), this.targetSpeedKmPerSecond)
+    const hasMovementInput = length(desiredLocalDirection) > 1e-12
+    const desiredLocalVelocity = hasMovementInput
+      ? scale(normalize(desiredLocalDirection), this.targetSpeedKmPerSecond)
       : ([0, 0, 0] as const)
     const response = 1 - Math.exp(-(hasMovementInput ? 5 : 7) * deltaSeconds)
 
-    this.velocityKmPerSecond = lerp(this.velocityKmPerSecond, desiredVelocity, response)
+    this.localVelocityKmPerSecond = lerp(
+      this.localVelocityKmPerSecond,
+      desiredLocalVelocity,
+      response,
+    )
+    let worldVelocityKmPerSecond = add(
+      scale(this.camera.right, this.localVelocityKmPerSecond[0]),
+      add(
+        scale(this.camera.forward, this.localVelocityKmPerSecond[1]),
+        scale(this.camera.up, this.localVelocityKmPerSecond[2]),
+      ),
+    )
     this.camera.move(
-      scale(this.velocityKmPerSecond, deltaSeconds),
-      this.parameters.planetRadiusKm,
-      this.parameters.minimumCameraAltitudeKm,
+      scale(worldVelocityKmPerSecond, deltaSeconds),
+      this.planetRadiusKm,
+      MINIMUM_CAMERA_ALTITUDE_KM,
     )
 
     const currentAltitudeKm = altitudeFromPosition(
       this.camera.position,
-      this.parameters.planetRadiusKm,
+      this.planetRadiusKm,
     )
 
     if (
-      currentAltitudeKm <= this.parameters.minimumCameraAltitudeKm + 1e-6 &&
-      dot(this.velocityKmPerSecond, this.camera.localUp) < 0
+      currentAltitudeKm <= MINIMUM_CAMERA_ALTITUDE_KM + 1e-6 &&
+      dot(worldVelocityKmPerSecond, this.camera.localUp) < 0
     ) {
-      this.velocityKmPerSecond = projectOntoPlane(
-        this.velocityKmPerSecond,
+      worldVelocityKmPerSecond = projectOntoPlane(
+        worldVelocityKmPerSecond,
         this.camera.localUp,
       )
+      this.localVelocityKmPerSecond = [
+        dot(worldVelocityKmPerSecond, this.camera.right),
+        dot(worldVelocityKmPerSecond, this.camera.forward),
+        dot(worldVelocityKmPerSecond, this.camera.up),
+      ]
     }
 
-    this.actualSpeedKmPerSecond = length(this.velocityKmPerSecond)
+    this.actualSpeedKmPerSecond = length(worldVelocityKmPerSecond)
   }
 
   private updateOrbit(deltaSeconds: number): void {
@@ -326,7 +453,7 @@ export class CameraController {
       position[2] - previousPosition[2],
     ]) / deltaSeconds
     this.targetSpeedKmPerSecond = automaticSpeedKmPerSecond(
-      this.orbitRadiusKm - this.parameters.planetRadiusKm,
+      this.orbitRadiusKm - this.planetRadiusKm,
     )
   }
 
@@ -340,16 +467,17 @@ export class CameraController {
   }
 
   private initializeFreeViewFromCamera(): void {
-    this.freeView = zUpViewAnglesFromForward(
-      this.camera.forward,
-      this.freeView.yawRadians,
-    )
+    this.freeView = freeViewFromBasis(this.camera.forward, this.camera.up)
+  }
+
+  private applyFreeView(): void {
+    const basis = freeViewBasis(this.freeView)
+    this.camera.setPose(this.camera.position, basis.forward, basis.up)
   }
 
   private clampOrbit(): void {
-    const minimumRadius =
-      this.parameters.planetRadiusKm + this.parameters.minimumCameraAltitudeKm
-    const maximumRadius = this.parameters.planetRadiusKm + 100_000
+    const minimumRadius = this.planetRadiusKm + MINIMUM_CAMERA_ALTITUDE_KM
+    const maximumRadius = this.planetRadiusKm + 100_000
     this.targetOrbitRadiusKm = Math.max(
       minimumRadius,
       Math.min(maximumRadius, this.targetOrbitRadiusKm),
@@ -379,7 +507,7 @@ export class CameraController {
       forward: this.camera.forward,
       right: this.camera.right,
       up: this.camera.up,
-      freeView: { ...this.freeView },
+      freeRollRadians: this.freeView.rollRadians,
       orbitAngles: { ...this.orbitAngles },
     }
     const previous = this.viewProbeSnapshot
@@ -438,7 +566,8 @@ export class CameraController {
   private resetInput(): void {
     this.pressedKeys.clear()
     this.orbitDragging = false
-    this.velocityKmPerSecond = [0, 0, 0]
+    this.localVelocityKmPerSecond = [0, 0, 0]
+    this.pendingFreeLookRotationRadians = [0, 0, 0]
     this.actualSpeedKmPerSecond = 0
   }
 
@@ -492,7 +621,6 @@ export class CameraController {
         movementLength,
         timestamp: event.timeStamp,
         pointerLocked: true,
-        freeView: { ...this.freeView },
         camera: {
           position: [...this.camera.position],
           forward: this.camera.forward,
@@ -503,17 +631,6 @@ export class CameraController {
       return
     }
 
-    this.freeView = {
-      yawRadians:
-        this.freeView.yawRadians + event.movementX * sensitivity,
-      pitchRadians: Math.max(
-        -CAMERA_PITCH_LIMIT_RADIANS,
-        Math.min(
-          CAMERA_PITCH_LIMIT_RADIANS,
-          this.freeView.pitchRadians - event.movementY * sensitivity,
-        ),
-      ),
-    }
     this.viewProbeInputBudgetRadians +=
       (Math.abs(event.movementX) + Math.abs(event.movementY)) * sensitivity
     this.lastViewProbeInput = {
@@ -522,7 +639,14 @@ export class CameraController {
       movementY: event.movementY,
       timestamp: event.timeStamp,
     }
-    this.camera.setZUpView(this.freeView)
+    this.pendingFreeLookRotationRadians = add(
+      this.pendingFreeLookRotationRadians,
+      [
+        -event.movementY * sensitivity,
+        0,
+        -event.movementX * sensitivity,
+      ],
+    )
   }
 
   private readonly onPointerMove = (event: PointerEvent): void => {

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { EARTH_STAGE_ONE } from './atmosphere/AtmosphereParameters.ts'
+import { EARTH_ATMOSPHERE } from './atmosphere/AtmosphereParameters.ts'
 import {
   AtmosphereRenderer,
+  type AtmosphereDebugView,
+  type AtmosphereQuality,
   type AtmosphereRendererInfo,
 } from './atmosphere/AtmosphereRenderer.ts'
 import {
   CAMERA_PRESETS,
   CameraController,
+  INITIAL_CAMERA_ALTITUDE_KM,
   type CameraMode,
   type CameraPresetId,
 } from './camera/CameraController.ts'
@@ -25,6 +28,9 @@ import {
   type DebugGridPlane,
 } from './ui/DebugOverlay.ts'
 
+const DEFAULT_EXPOSURE = 10
+const DEFAULT_QUALITY: AtmosphereQuality = 'medium'
+
 const canvas = ref<HTMLCanvasElement | null>(null)
 const debugCanvas = ref<HTMLCanvasElement | null>(null)
 const mode = ref<CameraMode>('free')
@@ -32,8 +38,15 @@ const verticalFovDegrees = ref(60)
 const speedExponent = ref(0)
 const sunAzimuthDegrees = ref(135)
 const sunElevationDegrees = ref(25)
-const exposure = ref(1)
+const exposure = ref(DEFAULT_EXPOSURE)
 const geometryDebug = ref(false)
+const quality = ref<AtmosphereQuality>(DEFAULT_QUALITY)
+const multipleScattering = ref(true)
+const debugView = ref<AtmosphereDebugView>('final')
+const aerialPerspectiveSlice = ref(1)
+const rayleighEnabled = ref(true)
+const mieEnabled = ref(true)
+const ozoneEnabled = ref(true)
 const gridDebug = ref(true)
 const skyGridDebug = ref(false)
 const gridPlane = ref<DebugGridPlane>('xy')
@@ -41,16 +54,68 @@ const statusMessage = ref('正在初始化 WebGPU...')
 const errorMessage = ref('')
 
 const telemetry = reactive({
-  altitudeKm: EARTH_STAGE_ONE.initialCameraAltitudeKm,
+  altitudeKm: INITIAL_CAMERA_ALTITUDE_KM,
   actualSpeedKmPerSecond: 0,
   targetSpeedKmPerSecond: 0,
   position: [0, 0, 0] as Vec3,
   frameMilliseconds: 0,
   submitMilliseconds: 0,
+  rebuiltPasses: '无',
+  gpuPasses: '未采样',
   pointerLocked: false,
 })
 
 const rendererInfo = ref<AtmosphereRendererInfo | null>(null)
+
+const FIXED_SCENARIOS = [
+  {
+    id: 'ground-noon',
+    label: 'Ground noon',
+    preset: 'surface',
+    quality: 'reference',
+    sunAzimuthDegrees: 180,
+    sunElevationDegrees: 0,
+  },
+  {
+    id: 'sunset',
+    label: 'Sunset',
+    preset: 'surface',
+    quality: 'reference',
+    sunAzimuthDegrees: 90,
+    sunElevationDegrees: 0,
+  },
+  {
+    id: 'twilight',
+    label: 'Twilight',
+    preset: 'surface',
+    quality: 'reference',
+    sunAzimuthDegrees: 84,
+    sunElevationDegrees: 0,
+  },
+  {
+    id: 'space-limb',
+    label: 'Space limb',
+    preset: 'space-limb',
+    quality: 'reference',
+    sunAzimuthDegrees: 135,
+    sunElevationDegrees: 25,
+  },
+  {
+    id: 'tilted-twilight',
+    label: '斜向晨昏线',
+    preset: 'tilted-tangent',
+    quality: 'medium',
+    sunAzimuthDegrees: 92,
+    sunElevationDegrees: -10.5,
+  },
+] as const satisfies readonly {
+  id: string
+  label: string
+  preset: CameraPresetId
+  quality: AtmosphereQuality
+  sunAzimuthDegrees: number
+  sunElevationDegrees: number
+}[]
 
 let cameraState: PlanetCamera | null = null
 let controller: CameraController | null = null
@@ -68,13 +133,38 @@ function applyPreset(id: CameraPresetId): void {
   controller?.applyPreset(id)
 }
 
+function selectQuality(nextQuality: AtmosphereQuality): void {
+  quality.value = nextQuality
+
+  if (nextQuality === 'reference') {
+    multipleScattering.value = false
+  }
+}
+
+function applyFixedScenario(
+  scenario: (typeof FIXED_SCENARIOS)[number],
+): void {
+  selectQuality(scenario.quality)
+  debugView.value = 'final'
+  sunAzimuthDegrees.value = scenario.sunAzimuthDegrees
+  sunElevationDegrees.value = scenario.sunElevationDegrees
+  controller?.applyPreset(scenario.preset)
+}
+
 function restoreEarthDefaults(): void {
   verticalFovDegrees.value = 60
   speedExponent.value = 0
   sunAzimuthDegrees.value = 135
   sunElevationDegrees.value = 25
-  exposure.value = 1
+  exposure.value = DEFAULT_EXPOSURE
   geometryDebug.value = false
+  quality.value = DEFAULT_QUALITY
+  multipleScattering.value = true
+  debugView.value = 'final'
+  aerialPerspectiveSlice.value = 1
+  rayleighEnabled.value = true
+  mieEnabled.value = true
+  ozoneEnabled.value = true
   gridDebug.value = true
   skyGridDebug.value = false
   gridPlane.value = 'xy'
@@ -107,7 +197,7 @@ async function start(): Promise<void> {
   }
 
   const initialRadius =
-    EARTH_STAGE_ONE.planetRadiusKm + EARTH_STAGE_ONE.initialCameraAltitudeKm
+    EARTH_ATMOSPHERE.bottomRadiusKm + INITIAL_CAMERA_ALTITUDE_KM
   const camera = new PlanetCamera(
     scale(INITIAL_CAMERA_RADIAL, initialRadius),
     [1, 0, 0],
@@ -117,11 +207,11 @@ async function start(): Promise<void> {
   const cameraController = new CameraController(
     renderingCanvas,
     camera,
-    EARTH_STAGE_ONE,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
   )
   const atmosphereRenderer = await AtmosphereRenderer.create(
     renderingCanvas,
-    EARTH_STAGE_ONE,
+    EARTH_ATMOSPHERE,
     (message) => {
       errorMessage.value = message
       statusMessage.value = '渲染已停止'
@@ -139,13 +229,13 @@ async function start(): Promise<void> {
   renderer = atmosphereRenderer
   const overlay = new DebugOverlay(
     overlayCanvas,
-    EARTH_STAGE_ONE.atmosphereRadiusKm * 1.5,
+    EARTH_ATMOSPHERE.topRadiusKm * 1.5,
   )
   debugOverlay = overlay
   rendererInfo.value = atmosphereRenderer.info
   cameraController.attach()
   document.addEventListener('pointerlockchange', handlePointerLockChange)
-  statusMessage.value = 'WebGPU 阶段一管线运行中'
+  statusMessage.value = 'WebGPU 大气管线运行中'
 
   let previousTime: number | null = null
   let telemetryUpdatedAt = performance.now()
@@ -159,7 +249,7 @@ async function start(): Promise<void> {
 
     cameraController.update(deltaSeconds)
 
-    const submitMilliseconds = atmosphereRenderer.render({
+    const frameResult = atmosphereRenderer.render({
       camera,
       sunDirection: sunDirectionFromAngles(
         sunAzimuthDegrees.value,
@@ -167,6 +257,14 @@ async function start(): Promise<void> {
       ),
       exposure: exposure.value,
       geometryDebug: geometryDebug.value,
+      quality: quality.value,
+      multipleScattering:
+        quality.value === 'reference' ? false : multipleScattering.value,
+      debugView: debugView.value,
+      aerialPerspectiveSlice: aerialPerspectiveSlice.value,
+      rayleighEnabled: rayleighEnabled.value,
+      mieEnabled: mieEnabled.value,
+      ozoneEnabled: ozoneEnabled.value,
     })
     overlay.render(
       camera,
@@ -183,13 +281,28 @@ async function start(): Promise<void> {
     if (now - telemetryUpdatedAt >= 100) {
       telemetry.altitudeKm = altitudeFromPosition(
         camera.position,
-        EARTH_STAGE_ONE.planetRadiusKm,
+        EARTH_ATMOSPHERE.bottomRadiusKm,
       )
       telemetry.actualSpeedKmPerSecond = cameraController.actualSpeedKmPerSecond
       telemetry.targetSpeedKmPerSecond = cameraController.targetSpeedKmPerSecond
       telemetry.position = camera.position
       telemetry.frameMilliseconds = smoothedFrameMilliseconds
-      telemetry.submitMilliseconds = submitMilliseconds
+      telemetry.submitMilliseconds = frameResult.submitMilliseconds
+      telemetry.rebuiltPasses =
+        frameResult.rebuiltPasses.length > 0
+          ? frameResult.rebuiltPasses.join(', ')
+          : '无'
+      const gpuPassEntries = frameResult.gpuPassMilliseconds
+        ? Object.entries(frameResult.gpuPassMilliseconds)
+        : []
+      telemetry.gpuPasses =
+        gpuPassEntries.length > 0
+          ? gpuPassEntries
+              .map(([label, milliseconds]) => `${label} ${milliseconds.toFixed(3)} ms`)
+              .join(', ')
+          : rendererInfo.value?.timestampQuerySupported
+            ? '等待采样'
+            : '不可用'
       speedExponent.value = cameraController.speedExponent
       telemetryUpdatedAt = now
     }
@@ -231,7 +344,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="planetary-atmosphere">
     <header class="page-header">
-      <h1>行星大气实验</h1>
+      <h1>大气实验</h1>
       <output :class="{ failed: errorMessage }">{{ statusMessage }}</output>
     </header>
 
@@ -299,6 +412,94 @@ onBeforeUnmount(() => {
 
         <fieldset>
           <legend>太阳与输出</legend>
+          <div class="segmented">
+            <button
+              type="button"
+              :aria-pressed="quality === 'reference'"
+              @click="selectQuality('reference')"
+            >
+              Reference
+            </button>
+            <button
+              type="button"
+              :aria-pressed="quality === 'low'"
+              @click="selectQuality('low')"
+            >
+              Low
+            </button>
+            <button
+              type="button"
+              :aria-pressed="quality === 'medium'"
+              @click="selectQuality('medium')"
+            >
+              Medium
+            </button>
+            <button
+              type="button"
+              :aria-pressed="quality === 'high'"
+              @click="selectQuality('high')"
+            >
+              High
+            </button>
+          </div>
+          <label class="checkbox">
+            <input
+              v-model="multipleScattering"
+              type="checkbox"
+              :disabled="quality === 'reference'"
+            />
+            <span>多重散射（Production）</span>
+          </label>
+          <label class="checkbox">
+            <input v-model="rayleighEnabled" type="checkbox" />
+            <span>Rayleigh</span>
+          </label>
+          <label class="checkbox">
+            <input v-model="mieEnabled" type="checkbox" />
+            <span>Mie</span>
+          </label>
+          <label class="checkbox">
+            <input v-model="ozoneEnabled" type="checkbox" />
+            <span>Ozone 吸收</span>
+          </label>
+          <label>
+            <span>调试视图</span>
+            <select v-model="debugView">
+              <option value="final">Final</option>
+              <option value="transmittance">Transmittance</option>
+              <option value="multiple-scattering">Multi-Scattering</option>
+              <option value="sky-view">Sky-View</option>
+              <option value="aerial-radiance">Aerial L</option>
+              <option value="aerial-transmittance">Aerial T</option>
+              <option value="density">Density RGB</option>
+            </select>
+          </label>
+          <label
+            v-if="
+              debugView === 'aerial-radiance' ||
+              debugView === 'aerial-transmittance'
+            "
+          >
+            <span>体切片</span>
+            <input
+              v-model.number="aerialPerspectiveSlice"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+            />
+            <output>{{ aerialPerspectiveSlice.toFixed(2) }}</output>
+          </label>
+          <div class="presets">
+            <button
+              v-for="scenario in FIXED_SCENARIOS"
+              :key="scenario.id"
+              type="button"
+              @click="applyFixedScenario(scenario)"
+            >
+              {{ scenario.label }}
+            </button>
+          </div>
           <label>
             <span>方位角</span>
             <input v-model.number="sunAzimuthDegrees" type="range" min="-180" max="180" step="1" />
@@ -311,7 +512,7 @@ onBeforeUnmount(() => {
           </label>
           <label>
             <span>曝光</span>
-            <input v-model.number="exposure" type="range" min="0.05" max="4" step="0.05" />
+            <input v-model.number="exposure" type="range" min="0.25" max="20" step="0.25" />
             <output>{{ exposure.toFixed(2) }}</output>
           </label>
           <label class="checkbox">
@@ -351,6 +552,10 @@ onBeforeUnmount(() => {
             <dd>{{ telemetry.frameMilliseconds.toFixed(2) }} ms</dd>
             <dt>CPU submit</dt>
             <dd>{{ telemetry.submitMilliseconds.toFixed(2) }} ms</dd>
+            <dt>本帧重建</dt>
+            <dd>{{ telemetry.rebuiltPasses }}</dd>
+            <dt>GPU pass</dt>
+            <dd>{{ telemetry.gpuPasses }}</dd>
             <dt>Pointer lock</dt>
             <dd>{{ telemetry.pointerLocked ? '已锁定' : '未锁定' }}</dd>
           </dl>
@@ -363,6 +568,10 @@ onBeforeUnmount(() => {
             <dd>{{ rendererInfo.canvasFormat }}</dd>
             <dt>适配器</dt>
             <dd>{{ rendererInfo.adapter }}</dd>
+            <dt>GPU timestamp</dt>
+            <dd>
+              {{ rendererInfo.timestampQuerySupported ? '已启用' : '不支持' }}
+            </dd>
           </dl>
         </fieldset>
 
