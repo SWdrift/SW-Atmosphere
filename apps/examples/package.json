@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/planetary-atmosphere.test.ts",
+    "check:quick": "vue-tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
     "vue": "^3.5.39",

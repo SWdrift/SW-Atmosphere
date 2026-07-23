@@ -1,0 +1,9 @@
+prefix_rule(
+    pattern = ["pnpm", "--filter", "examples", ["test", "build"]],
+    decision = "allow",
+    justification = "允许本项目 examples 测试和构建在沙箱外无提示执行",
+    match = [
+        "pnpm --filter examples test",
+        "pnpm --filter examples build",
+    ],
+)

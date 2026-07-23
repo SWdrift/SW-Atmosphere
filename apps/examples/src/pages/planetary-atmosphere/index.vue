@@ -1,0 +1,567 @@
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { EARTH_STAGE_ONE } from './atmosphere/AtmosphereParameters.ts'
+import {
+  AtmosphereRenderer,
+  type AtmosphereRendererInfo,
+} from './atmosphere/AtmosphereRenderer.ts'
+import {
+  CAMERA_PRESETS,
+  CameraController,
+  type CameraMode,
+  type CameraPresetId,
+} from './camera/CameraController.ts'
+import { PlanetCamera } from './camera/PlanetCamera.ts'
+import {
+  altitudeFromPosition,
+  INITIAL_CAMERA_RADIAL,
+  sunDirectionFromAngles,
+  WORLD_UP,
+} from './math/coordinates.ts'
+import type { Vec3 } from './math/vector3.ts'
+import { scale } from './math/vector3.ts'
+import {
+  DebugOverlay,
+  type DebugGridPlane,
+} from './ui/DebugOverlay.ts'
+
+const canvas = ref<HTMLCanvasElement | null>(null)
+const debugCanvas = ref<HTMLCanvasElement | null>(null)
+const mode = ref<CameraMode>('free')
+const verticalFovDegrees = ref(60)
+const speedExponent = ref(0)
+const sunAzimuthDegrees = ref(135)
+const sunElevationDegrees = ref(25)
+const exposure = ref(1)
+const geometryDebug = ref(false)
+const gridDebug = ref(true)
+const skyGridDebug = ref(false)
+const gridPlane = ref<DebugGridPlane>('xy')
+const statusMessage = ref('正在初始化 WebGPU...')
+const errorMessage = ref('')
+
+const telemetry = reactive({
+  altitudeKm: EARTH_STAGE_ONE.initialCameraAltitudeKm,
+  actualSpeedKmPerSecond: 0,
+  targetSpeedKmPerSecond: 0,
+  position: [0, 0, 0] as Vec3,
+  frameMilliseconds: 0,
+  submitMilliseconds: 0,
+  pointerLocked: false,
+})
+
+const rendererInfo = ref<AtmosphereRendererInfo | null>(null)
+
+let cameraState: PlanetCamera | null = null
+let controller: CameraController | null = null
+let renderer: AtmosphereRenderer | null = null
+let debugOverlay: DebugOverlay | null = null
+let animationFrameId = 0
+let disposed = false
+
+function setMode(nextMode: CameraMode): void {
+  mode.value = nextMode
+  controller?.setMode(nextMode)
+}
+
+function applyPreset(id: CameraPresetId): void {
+  controller?.applyPreset(id)
+}
+
+function restoreEarthDefaults(): void {
+  verticalFovDegrees.value = 60
+  speedExponent.value = 0
+  sunAzimuthDegrees.value = 135
+  sunElevationDegrees.value = 25
+  exposure.value = 1
+  geometryDebug.value = false
+  gridDebug.value = true
+  skyGridDebug.value = false
+  gridPlane.value = 'xy'
+  setMode('free')
+  controller?.applyPreset('surface')
+}
+
+function formatDistance(value: number): string {
+  if (Math.abs(value) < 1) {
+    return `${(value * 1000).toFixed(1)} m`
+  }
+
+  return `${value.toFixed(value < 100 ? 2 : 1)} km`
+}
+
+function formatVector(vector: Vec3): string {
+  return vector.map((component) => component.toFixed(2)).join(', ')
+}
+
+function handlePointerLockChange(): void {
+  telemetry.pointerLocked = document.pointerLockElement === canvas.value
+}
+
+async function start(): Promise<void> {
+  const renderingCanvas = canvas.value
+  const overlayCanvas = debugCanvas.value
+
+  if (!renderingCanvas || !overlayCanvas) {
+    throw new Error('缺少行星大气 canvas 或调试 overlay。')
+  }
+
+  const initialRadius =
+    EARTH_STAGE_ONE.planetRadiusKm + EARTH_STAGE_ONE.initialCameraAltitudeKm
+  const camera = new PlanetCamera(
+    scale(INITIAL_CAMERA_RADIAL, initialRadius),
+    [1, 0, 0],
+    WORLD_UP,
+    60,
+  )
+  const cameraController = new CameraController(
+    renderingCanvas,
+    camera,
+    EARTH_STAGE_ONE,
+  )
+  const atmosphereRenderer = await AtmosphereRenderer.create(
+    renderingCanvas,
+    EARTH_STAGE_ONE,
+    (message) => {
+      errorMessage.value = message
+      statusMessage.value = '渲染已停止'
+      cancelAnimationFrame(animationFrameId)
+    },
+  )
+
+  if (disposed) {
+    atmosphereRenderer.destroy()
+    return
+  }
+
+  cameraState = camera
+  controller = cameraController
+  renderer = atmosphereRenderer
+  const overlay = new DebugOverlay(
+    overlayCanvas,
+    EARTH_STAGE_ONE.atmosphereRadiusKm * 1.5,
+  )
+  debugOverlay = overlay
+  rendererInfo.value = atmosphereRenderer.info
+  cameraController.attach()
+  document.addEventListener('pointerlockchange', handlePointerLockChange)
+  statusMessage.value = 'WebGPU 阶段一管线运行中'
+
+  let previousTime: number | null = null
+  let telemetryUpdatedAt = performance.now()
+  let smoothedFrameMilliseconds = 0
+
+  function renderFrame(now: number): void {
+    const frameMilliseconds =
+      previousTime === null ? 0 : Math.max(0, now - previousTime)
+    const deltaSeconds = Math.min(frameMilliseconds / 1000, 0.05)
+    previousTime = now
+
+    cameraController.update(deltaSeconds)
+
+    const submitMilliseconds = atmosphereRenderer.render({
+      camera,
+      sunDirection: sunDirectionFromAngles(
+        sunAzimuthDegrees.value,
+        sunElevationDegrees.value,
+      ),
+      exposure: exposure.value,
+      geometryDebug: geometryDebug.value,
+    })
+    overlay.render(
+      camera,
+      gridPlane.value,
+      gridDebug.value,
+      skyGridDebug.value,
+    )
+
+    smoothedFrameMilliseconds =
+      smoothedFrameMilliseconds === 0
+        ? frameMilliseconds
+        : smoothedFrameMilliseconds * 0.9 + frameMilliseconds * 0.1
+
+    if (now - telemetryUpdatedAt >= 100) {
+      telemetry.altitudeKm = altitudeFromPosition(
+        camera.position,
+        EARTH_STAGE_ONE.planetRadiusKm,
+      )
+      telemetry.actualSpeedKmPerSecond = cameraController.actualSpeedKmPerSecond
+      telemetry.targetSpeedKmPerSecond = cameraController.targetSpeedKmPerSecond
+      telemetry.position = camera.position
+      telemetry.frameMilliseconds = smoothedFrameMilliseconds
+      telemetry.submitMilliseconds = submitMilliseconds
+      speedExponent.value = cameraController.speedExponent
+      telemetryUpdatedAt = now
+    }
+
+    animationFrameId = requestAnimationFrame(renderFrame)
+  }
+
+  animationFrameId = requestAnimationFrame(renderFrame)
+}
+
+watch(verticalFovDegrees, (degrees) => {
+  cameraState?.setVerticalFov(degrees)
+})
+
+watch(speedExponent, (exponent) => {
+  controller?.setSpeedExponent(exponent)
+})
+
+onMounted(() => {
+  start().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+
+    console.error(error)
+    errorMessage.value = message
+    statusMessage.value = '初始化失败'
+  })
+})
+
+onBeforeUnmount(() => {
+  disposed = true
+  cancelAnimationFrame(animationFrameId)
+  document.removeEventListener('pointerlockchange', handlePointerLockChange)
+  controller?.detach()
+  renderer?.destroy()
+  debugOverlay?.clear()
+})
+</script>
+
+<template>
+  <div class="planetary-atmosphere">
+    <header class="page-header">
+      <h1>行星大气实验</h1>
+      <output :class="{ failed: errorMessage }">{{ statusMessage }}</output>
+    </header>
+
+    <div class="workspace">
+      <section class="viewport" aria-label="星球舞台">
+        <div class="canvas-stack">
+          <canvas
+            ref="canvas"
+            class="render-canvas"
+            tabindex="0"
+            aria-label="原生 WebGPU 星球、太阳和大气壳几何"
+          ></canvas>
+          <canvas
+            ref="debugCanvas"
+            class="debug-overlay"
+            aria-hidden="true"
+          ></canvas>
+        </div>
+        <pre v-if="errorMessage" class="error">{{ errorMessage }}</pre>
+      </section>
+
+      <aside class="controls" aria-label="调试控制">
+        <fieldset>
+          <legend>摄像机</legend>
+          <div class="segmented">
+            <button
+              type="button"
+              :aria-pressed="mode === 'free'"
+              @click="setMode('free')"
+            >
+              Free flight
+            </button>
+            <button
+              type="button"
+              :aria-pressed="mode === 'orbit'"
+              @click="setMode('orbit')"
+            >
+              Orbit
+            </button>
+          </div>
+
+          <label>
+            <span>垂直 FOV</span>
+            <input v-model.number="verticalFovDegrees" type="range" min="20" max="100" step="1" />
+            <output>{{ verticalFovDegrees }}°</output>
+          </label>
+
+          <label>
+            <span>速度指数</span>
+            <input v-model.number="speedExponent" type="range" min="-4" max="6" step="0.25" />
+            <output>2^{{ speedExponent.toFixed(2) }}</output>
+          </label>
+
+          <div class="presets">
+            <button
+              v-for="preset in CAMERA_PRESETS"
+              :key="preset.id"
+              type="button"
+              @click="applyPreset(preset.id)"
+            >
+              {{ preset.label }}
+            </button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>太阳与输出</legend>
+          <label>
+            <span>方位角</span>
+            <input v-model.number="sunAzimuthDegrees" type="range" min="-180" max="180" step="1" />
+            <output>{{ sunAzimuthDegrees }}°</output>
+          </label>
+          <label>
+            <span>高度角</span>
+            <input v-model.number="sunElevationDegrees" type="range" min="-20" max="90" step="0.5" />
+            <output>{{ sunElevationDegrees.toFixed(1) }}°</output>
+          </label>
+          <label>
+            <span>曝光</span>
+            <input v-model.number="exposure" type="range" min="0.05" max="4" step="0.05" />
+            <output>{{ exposure.toFixed(2) }}</output>
+          </label>
+          <label class="checkbox">
+            <input v-model="geometryDebug" type="checkbox" />
+            <span>几何分类调试</span>
+          </label>
+          <label class="checkbox">
+            <input v-model="gridDebug" type="checkbox" />
+            <span>全局 XYZ 网格</span>
+          </label>
+          <label class="checkbox">
+            <input v-model="skyGridDebug" type="checkbox" />
+            <span>天空经纬网格</span>
+          </label>
+          <label>
+            <span>网格平面</span>
+            <select v-model="gridPlane">
+              <option value="xy">XY</option>
+              <option value="xz">XZ</option>
+              <option value="yz">YZ</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>坐标与帧</legend>
+          <dl>
+            <dt>高度</dt>
+            <dd>{{ formatDistance(telemetry.altitudeKm) }}</dd>
+            <dt>实际速度</dt>
+            <dd>{{ formatDistance(telemetry.actualSpeedKmPerSecond) }}/s</dd>
+            <dt>目标速度</dt>
+            <dd>{{ formatDistance(telemetry.targetSpeedKmPerSecond) }}/s</dd>
+            <dt>位置 km</dt>
+            <dd>{{ formatVector(telemetry.position) }}</dd>
+            <dt>帧时间</dt>
+            <dd>{{ telemetry.frameMilliseconds.toFixed(2) }} ms</dd>
+            <dt>CPU submit</dt>
+            <dd>{{ telemetry.submitMilliseconds.toFixed(2) }} ms</dd>
+            <dt>Pointer lock</dt>
+            <dd>{{ telemetry.pointerLocked ? '已锁定' : '未锁定' }}</dd>
+          </dl>
+        </fieldset>
+
+        <fieldset v-if="rendererInfo">
+          <legend>WebGPU</legend>
+          <dl>
+            <dt>画布格式</dt>
+            <dd>{{ rendererInfo.canvasFormat }}</dd>
+            <dt>适配器</dt>
+            <dd>{{ rendererInfo.adapter }}</dd>
+          </dl>
+        </fieldset>
+
+        <button type="button" @click="restoreEarthDefaults">恢复 Earth 默认值</button>
+      </aside>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.planetary-atmosphere {
+  min-width: 0;
+}
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #a2a9b1;
+}
+
+.page-header output {
+  font-size: 13px;
+  color: #54595d;
+}
+
+.page-header output.failed,
+.error {
+  color: #b32424;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-height: calc(100vh - 74px);
+}
+
+.viewport {
+  min-width: 0;
+  padding: 10px 10px 0 0;
+}
+
+.canvas-stack {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 94px);
+  min-height: 420px;
+}
+
+.render-canvas,
+.debug-overlay {
+  position: absolute;
+  inset: 0;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+.render-canvas {
+  border: 1px solid #72777d;
+  background: #000;
+  outline: none;
+}
+
+.render-canvas:focus {
+  border-color: #36c;
+  box-shadow: 0 0 0 1px #36c;
+}
+
+.debug-overlay {
+  pointer-events: none;
+}
+
+.error {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 8px;
+  border: 1px solid #b32424;
+  white-space: pre-wrap;
+}
+
+.controls {
+  min-width: 0;
+  padding: 10px 0 16px 10px;
+  border-left: 1px solid #a2a9b1;
+  background: #f8f9fa;
+}
+
+fieldset {
+  margin: 0 0 14px;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid #c8ccd1;
+}
+
+legend {
+  padding: 0 8px 0 0;
+  font-weight: 700;
+}
+
+label {
+  display: grid;
+  grid-template-columns: 78px minmax(80px, 1fr) 62px;
+  align-items: center;
+  gap: 6px;
+  margin: 7px 0;
+  font-size: 13px;
+}
+
+label output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+input[type='range'] {
+  width: 100%;
+}
+
+.checkbox {
+  grid-template-columns: auto 1fr;
+}
+
+.segmented,
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+button {
+  min-height: 30px;
+  border: 1px solid #72777d;
+  border-radius: 2px;
+  color: #202122;
+  background: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #eaecf0;
+}
+
+button[aria-pressed='true'] {
+  color: #fff;
+  border-color: #36c;
+  background: #36c;
+}
+
+.segmented button {
+  flex: 1;
+}
+
+.presets button {
+  flex: 1 0 56px;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 3px 8px;
+  margin: 0;
+  font-size: 12px;
+}
+
+dt {
+  color: #54595d;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .viewport {
+    padding-right: 0;
+  }
+
+  .canvas-stack {
+    height: 58vh;
+    min-height: 320px;
+  }
+
+  .controls {
+    padding-left: 0;
+    border-top: 1px solid #a2a9b1;
+    border-left: 0;
+  }
+}
+</style>
