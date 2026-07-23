@@ -57,8 +57,8 @@ export class PlanetCamera {
   }
 
   setVerticalFov(degrees: number): void {
-    if (!Number.isFinite(degrees) || degrees < 20 || degrees > 100) {
-      throw new Error('垂直 FOV 必须位于 20° 到 100°。')
+    if (!Number.isFinite(degrees) || degrees < 5 || degrees > 100) {
+      throw new Error('垂直 FOV 必须位于 5° 到 100°。')
     }
 
     this.verticalFovDegrees = degrees

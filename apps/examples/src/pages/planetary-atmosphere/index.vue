@@ -22,7 +22,7 @@ import {
   WORLD_UP,
 } from './math/coordinates.ts'
 import type { Vec3 } from './math/vector3.ts'
-import { scale } from './math/vector3.ts'
+import { dot, scale } from './math/vector3.ts'
 import {
   DebugOverlay,
   type DebugGridPlane,
@@ -55,6 +55,7 @@ const errorMessage = ref('')
 
 const telemetry = reactive({
   altitudeKm: INITIAL_CAMERA_ALTITUDE_KM,
+  localSunElevationDegrees: 0,
   actualSpeedKmPerSecond: 0,
   targetSpeedKmPerSecond: 0,
   position: [0, 0, 0] as Vec3,
@@ -69,52 +70,124 @@ const rendererInfo = ref<AtmosphereRendererInfo | null>(null)
 
 const FIXED_SCENARIOS = [
   {
-    id: 'ground-noon',
-    label: 'Ground noon',
+    id: 'ground-terminator',
+    label: '地表晨昏线 60°',
     preset: 'surface',
-    quality: 'reference',
-    sunAzimuthDegrees: 180,
-    sunElevationDegrees: 0,
-  },
-  {
-    id: 'sunset',
-    label: 'Sunset',
-    preset: 'surface',
-    quality: 'reference',
+    quality: 'high',
+    verticalFovDegrees: 60,
     sunAzimuthDegrees: 90,
     sunElevationDegrees: 0,
+    exposure: 10,
   },
   {
-    id: 'twilight',
-    label: 'Twilight',
+    id: 'ground-sun-plus-five',
+    label: '地表太阳 +5°',
     preset: 'surface',
-    quality: 'reference',
+    quality: 'high',
+    verticalFovDegrees: 60,
+    sunAzimuthDegrees: 95,
+    sunElevationDegrees: 0,
+    exposure: 10,
+  },
+  {
+    id: 'ground-sun-minus-one',
+    label: '地表太阳 −1°',
+    preset: 'surface',
+    quality: 'high',
+    verticalFovDegrees: 60,
+    sunAzimuthDegrees: 89,
+    sunElevationDegrees: 0,
+    exposure: 10,
+  },
+  {
+    id: 'ground-civil-twilight',
+    label: '地表太阳 −6°',
+    preset: 'surface',
+    quality: 'high',
+    verticalFovDegrees: 60,
     sunAzimuthDegrees: 84,
     sunElevationDegrees: 0,
+    exposure: 10,
+  },
+  {
+    id: 'ground-nautical-twilight',
+    label: '地表太阳 −12°',
+    preset: 'surface',
+    quality: 'high',
+    verticalFovDegrees: 60,
+    sunAzimuthDegrees: 78,
+    sunElevationDegrees: 0,
+    exposure: 10,
+  },
+  {
+    id: 'ground-astronomical-twilight',
+    label: '地表太阳 −18°',
+    preset: 'surface',
+    quality: 'high',
+    verticalFovDegrees: 60,
+    sunAzimuthDegrees: 72,
+    sunElevationDegrees: 0,
+    exposure: 10,
+  },
+  {
+    id: 'narrow-sunrise',
+    label: '地表太阳 5°',
+    preset: 'surface',
+    quality: 'high',
+    verticalFovDegrees: 5,
+    sunAzimuthDegrees: 90,
+    sunElevationDegrees: 0,
+    exposure: 2,
+  },
+  {
+    id: 'narrow-sunrise-10',
+    label: '地表太阳 10°',
+    preset: 'surface',
+    quality: 'high',
+    verticalFovDegrees: 10,
+    sunAzimuthDegrees: 90,
+    sunElevationDegrees: 0,
+    exposure: 2,
+  },
+  {
+    id: 'high-altitude-terminator',
+    label: '高空晨昏线 20 km',
+    preset: 'twenty-km',
+    quality: 'high',
+    verticalFovDegrees: 20,
+    sunAzimuthDegrees: 90,
+    sunElevationDegrees: 0,
+    exposure: 10,
   },
   {
     id: 'space-limb',
-    label: 'Space limb',
+    label: '太空大气边缘',
     preset: 'space-limb',
-    quality: 'reference',
-    sunAzimuthDegrees: 135,
-    sunElevationDegrees: 25,
+    quality: 'high',
+    verticalFovDegrees: 20,
+    sunAzimuthDegrees: 90,
+    sunElevationDegrees: 0,
+    exposure: 10,
   },
   {
-    id: 'tilted-twilight',
-    label: '斜向晨昏线',
-    preset: 'tilted-tangent',
-    quality: 'medium',
-    sunAzimuthDegrees: 92,
-    sunElevationDegrees: -10.5,
+    id: 'planetary-terminator',
+    label: '行星盘晨昏线',
+    preset: 'deep-space',
+    quality: 'high',
+    verticalFovDegrees: 20,
+    sunAzimuthDegrees: 90,
+    sunElevationDegrees: 0,
+    exposure: 10,
   },
 ] as const satisfies readonly {
   id: string
   label: string
   preset: CameraPresetId
   quality: AtmosphereQuality
+  verticalFovDegrees: number
   sunAzimuthDegrees: number
   sunElevationDegrees: number
+  exposure: number
 }[]
 
 let cameraState: PlanetCamera | null = null
@@ -146,8 +219,10 @@ function applyFixedScenario(
 ): void {
   selectQuality(scenario.quality)
   debugView.value = 'final'
+  verticalFovDegrees.value = scenario.verticalFovDegrees
   sunAzimuthDegrees.value = scenario.sunAzimuthDegrees
   sunElevationDegrees.value = scenario.sunElevationDegrees
+  exposure.value = scenario.exposure
   controller?.applyPreset(scenario.preset)
 }
 
@@ -249,12 +324,13 @@ async function start(): Promise<void> {
 
     cameraController.update(deltaSeconds)
 
+    const sunDirection = sunDirectionFromAngles(
+      sunAzimuthDegrees.value,
+      sunElevationDegrees.value,
+    )
     const frameResult = atmosphereRenderer.render({
       camera,
-      sunDirection: sunDirectionFromAngles(
-        sunAzimuthDegrees.value,
-        sunElevationDegrees.value,
-      ),
+      sunDirection,
       exposure: exposure.value,
       geometryDebug: geometryDebug.value,
       quality: quality.value,
@@ -283,6 +359,10 @@ async function start(): Promise<void> {
         camera.position,
         EARTH_ATMOSPHERE.bottomRadiusKm,
       )
+      telemetry.localSunElevationDegrees =
+        Math.asin(Math.max(-1, Math.min(1, dot(camera.localUp, sunDirection)))) *
+        180 /
+        Math.PI
       telemetry.actualSpeedKmPerSecond = cameraController.actualSpeedKmPerSecond
       telemetry.targetSpeedKmPerSecond = cameraController.targetSpeedKmPerSecond
       telemetry.position = camera.position
@@ -388,7 +468,7 @@ onBeforeUnmount(() => {
 
           <label>
             <span>垂直 FOV</span>
-            <input v-model.number="verticalFovDegrees" type="range" min="20" max="100" step="1" />
+            <input v-model.number="verticalFovDegrees" type="range" min="5" max="100" step="1" />
             <output>{{ verticalFovDegrees }}°</output>
           </label>
 
@@ -542,6 +622,8 @@ onBeforeUnmount(() => {
           <dl>
             <dt>高度</dt>
             <dd>{{ formatDistance(telemetry.altitudeKm) }}</dd>
+            <dt>局部太阳高度</dt>
+            <dd>{{ telemetry.localSunElevationDegrees.toFixed(2) }}°</dd>
             <dt>实际速度</dt>
             <dd>{{ formatDistance(telemetry.actualSpeedKmPerSecond) }}/s</dd>
             <dt>目标速度</dt>

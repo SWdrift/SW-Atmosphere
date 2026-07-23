@@ -9,6 +9,7 @@
 ## Meta Reference
 
 - 先读根目录 `cp-meta.md`，再读本文件；可复用记忆读取同目录 `cpm-atmosphere.md`。
+- 晴空视觉真实性、晨昏线、光谱颜色和参考图验收继续读取 `cp-atmosphere-visual.md`；性能工作读取 `cp-atmosphere-performance.md`。
 - 同时遵循根目录 `AGENTS.md` 与 `apps/examples/src/pages/AGENTS.md`。
 - 阶段完成或动态任务区膨胀时使用 `compact-control-plane`。
 - 修改或审查代码时使用 `code-smell-guard`，只处理当前改动引入或加重的坏味道。

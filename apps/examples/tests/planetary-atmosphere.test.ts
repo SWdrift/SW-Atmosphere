@@ -18,8 +18,10 @@ import {
   resolveAtmosphereLutDirtyPasses,
   skyViewParametersFromUv,
   skyViewUvFromParameters,
+  solarDiskIrradianceCosine,
   solarDiskPixelCoverage,
   solarDiskSolidAngle,
+  solarDiskVisibleFraction,
   transmittanceRadiusCosineFromUv,
   transmittanceUvFromRadiusCosine,
 } from '../src/pages/planetary-atmosphere/atmosphere/atmospherePhysics.ts'
@@ -210,6 +212,16 @@ test('大气参数：GPU 序列化布局固定且只包含物理真相', () => {
     EARTH_ATMOSPHERE.solarIrradianceWattsPerSquareMeterPerNm[0],
     1e-7,
   )
+  close(
+    uniforms[28],
+    EARTH_ATMOSPHERE.skySpectralRadianceToLinearSrgb[0],
+    1e-7,
+  )
+  close(
+    uniforms[32],
+    EARTH_ATMOSPHERE.sunSpectralRadianceToLinearSrgb[0],
+    1e-7,
+  )
 })
 
 test('大气参数：非法半径、剖面、反照率和 scattering/extinction fail fast', () => {
@@ -235,6 +247,12 @@ test('大气参数：非法半径、剖面、反照率和 scattering/extinction 
     serializeAtmosphereParameters({
       ...EARTH_ATMOSPHERE,
       mieScatteringPerKm: [0.01, 0.003996, 0.003996],
+    }),
+  )
+  assert.throws(() =>
+    serializeAtmosphereParameters({
+      ...EARTH_ATMOSPHERE,
+      skySpectralRadianceToLinearSrgb: [0, 1, 1],
     }),
   )
 })
@@ -318,6 +336,42 @@ test('太阳圆盘：像素角覆盖率在物理边缘连续且保持单调', ()
     ),
   )
   assert.throws(() => solarDiskPixelCoverage(0, radius, 0), /太阳圆盘覆盖率/)
+})
+
+test('太阳圆盘：穿越几何地平线时可见率和地表辐照连续', () => {
+  const radius = EARTH_ATMOSPHERE.sunAngularRadiusRadians
+  const distances = [-radius, -radius / 2, 0, radius / 2, radius]
+  const visibleFractions = distances.map((distance) =>
+    solarDiskVisibleFraction(distance, radius),
+  )
+  const irradianceCosines = distances.map((distance) =>
+    solarDiskIrradianceCosine(distance, radius),
+  )
+
+  close(visibleFractions[0], 0)
+  close(visibleFractions[2], 0.5)
+  close(visibleFractions[4], 1)
+  assert.ok(
+    visibleFractions.every(
+      (fraction, index) =>
+        index === 0 || fraction >= visibleFractions[index - 1],
+    ),
+  )
+  assert.ok(
+    irradianceCosines.every(
+      (cosine, index) =>
+        index === 0 || cosine >= irradianceCosines[index - 1],
+    ),
+  )
+  close(
+    irradianceCosines[2],
+    (2 * radius) / (3 * Math.PI),
+    1e-12,
+  )
+  assert.throws(
+    () => solarDiskVisibleFraction(Number.NaN, radius),
+    /太阳圆盘可见率/,
+  )
 })
 
 test('Transmittance 映射：地表到大气顶的 radius/cosine 与 UV 往返', () => {
@@ -551,6 +605,19 @@ test('PlanetCamera：正视球心时仍能构造稳定的 right/up', () => {
   close(dot(camera.forward, camera.up), 0)
   assert.ok(isFiniteVector(camera.right))
   assert.ok(isFiniteVector(camera.up))
+})
+
+test('PlanetCamera：视觉基准允许 5° 窄视场并拒绝范围外输入', () => {
+  const camera = new PlanetCamera(
+    [0, 0, EARTH_ATMOSPHERE.bottomRadiusKm + 1],
+    [0, 1, 0],
+    [0, 0, 1],
+    5,
+  )
+
+  assert.equal(camera.verticalFovDegrees, 5)
+  assert.throws(() => camera.setVerticalFov(4.99), /5° 到 100°/)
+  assert.throws(() => camera.setVerticalFov(100.01), /5° 到 100°/)
 })
 
 test('斜向切线预设：屏幕中的行星切线稳定倾斜 45°', () => {

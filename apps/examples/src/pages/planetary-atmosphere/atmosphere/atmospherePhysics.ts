@@ -149,6 +149,64 @@ export function solarDiskPixelCoverage(
   return 1 - t * t * (3 - 2 * t)
 }
 
+export function solarDiskVisibleFraction(
+  signedHorizonDistanceRadians: number,
+  angularRadiusRadians: number,
+): number {
+  if (
+    !Number.isFinite(signedHorizonDistanceRadians) ||
+    !Number.isFinite(angularRadiusRadians) ||
+    angularRadiusRadians <= 0 ||
+    angularRadiusRadians >= Math.PI / 2
+  ) {
+    throw new Error('太阳圆盘可见率需要有限的地平线角距和合法角半径。')
+  }
+
+  if (signedHorizonDistanceRadians <= -angularRadiusRadians) {
+    return 0
+  }
+  if (signedHorizonDistanceRadians >= angularRadiusRadians) {
+    return 1
+  }
+
+  const normalizedDistance =
+    signedHorizonDistanceRadians / angularRadiusRadians
+  return (
+    Math.acos(-normalizedDistance) +
+    normalizedDistance * Math.sqrt(1 - normalizedDistance ** 2)
+  ) / Math.PI
+}
+
+export function solarDiskIrradianceCosine(
+  signedHorizonDistanceRadians: number,
+  angularRadiusRadians: number,
+): number {
+  const visibleFraction = solarDiskVisibleFraction(
+    signedHorizonDistanceRadians,
+    angularRadiusRadians,
+  )
+
+  if (visibleFraction === 0) {
+    return 0
+  }
+  if (visibleFraction === 1) {
+    return Math.max(Math.sin(signedHorizonDistanceRadians), 0)
+  }
+
+  const normalizedDistance =
+    signedHorizonDistanceRadians / angularRadiusRadians
+  const segmentFirstMoment =
+    (2 / 3) *
+    angularRadiusRadians *
+    Math.pow(1 - normalizedDistance ** 2, 1.5) /
+    Math.PI
+
+  return Math.max(
+    signedHorizonDistanceRadians * visibleFraction + segmentFirstMoment,
+    0,
+  )
+}
+
 export function transmittanceUvFromRadiusCosine(
   bottomRadiusKm: number,
   topRadiusKm: number,

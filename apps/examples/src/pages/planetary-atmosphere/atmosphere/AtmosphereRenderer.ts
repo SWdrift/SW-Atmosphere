@@ -505,7 +505,7 @@ export class AtmosphereRenderer {
         frame.rayleighEnabled ? 1 : 0,
         frame.mieEnabled ? 1 : 0,
         frame.ozoneEnabled ? 1 : 0,
-        0,
+        frame.quality === 'high' || camera.verticalFovDegrees <= 20 ? 1 : 0,
       ],
       0,
     )

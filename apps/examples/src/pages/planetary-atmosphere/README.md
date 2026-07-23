@@ -63,8 +63,10 @@ Vue 生命周期和控件
   → Multi-Scattering LUT（32×32，RGB Ψms / 单位太阳辐照度）
   → Sky-View LUT（192×108，大气内观察者的天空辐亮度）
   → Aerial Perspective（两个 32³ RGB 体纹理）
+  → High 或 FOV≤20°：逐像素大气积分（复用 Transmittance / Multi-Scattering）
   → stageOne.wgsl（Reference 射线积分、太阳圆盘、Lambert 地表）
-  → exposure + tone mapping
+  → 三波长辐亮度近似转换为线性 sRGB
+  → exposure + tone mapping + sRGB 传递函数
   → canvas
 
 PlanetCamera
@@ -111,11 +113,15 @@ coverage = 1 - smoothstep(
 )
 ```
 
-判定。太阳 RGB 波长采样辐照度单位为 `W·m^-2·nm^-1`。太阳圆盘辐亮度由 `solarIrradianceWattsPerSquareMeterPerNm / (2π(1-cos(angularRadius)))` 得到，单位为 `W·m^-2·sr^-1·nm^-1`；圆盘边缘使用像素角距离的屏幕导数估计覆盖宽度，不扩大物理角半径。Lambert 地表使用 `albedo / π * solarIrradianceWattsPerSquareMeterPerNm * max(dot(normal, sunDirection), 0)`。散射/消光系数使用 `km^-1`，与 km 路径积分相乘后光学深度无量纲，因此最终大气辐亮度保持 `W·m^-2·sr^-1·nm^-1`。物理计算保持线性 HDR，只在最终 fragment 输出前执行一次曝光、指数 tone mapping 和显示 gamma。
+判定。太阳 RGB 波长采样辐照度单位为 `W·m^-2·nm^-1`。太阳圆盘辐亮度由 `solarIrradianceWattsPerSquareMeterPerNm / (2π(1-cos(angularRadius)))` 得到，单位为 `W·m^-2·sr^-1·nm^-1`；圆盘边缘使用像素角距离的屏幕导数估计覆盖宽度，不扩大物理角半径。
+
+照亮大气和地表的太阳不再使用中心射线二值遮挡。每个采样点根据太阳圆盘中心到几何地平线的带符号角距，解析计算均匀圆盘露出面积；部分遮挡时，地表余弦项还积分可见圆盘的一阶矩。Production 和 Reference、单次散射、Multi-Scattering 输入以及地表直射共同使用这套有限圆盘定义。部分遮挡区的光学路径使用贴近几何切线的安全方向查询，避免用穿过行星的中心方向读取 Transmittance。
+
+散射/消光系数使用 `km^-1`，与 km 路径积分相乘后光学深度无量纲，因此大气积分保持三条代表波长的光谱辐亮度。最终显示使用 Bruneton 680/550/440 nm 近似的 sky/sun 两组光谱到线性 sRGB 系数，并按绿色通道归一化以保持既有曝光尺度；直接太阳和地表直射先换算到 sky 编码后再与大气辐亮度合成。物理合成后只执行一次指数 tone mapping，并使用分段 sRGB 传递函数，不再以固定 `pow(1/2.2)` 代替显示编码。
 
 ## Uniform 布局
 
-物理参数 buffer 只在 renderer 创建时上传。TS 使用连续 28 个 `f32`，WGSL 使用 7 个 `vec4<f32>`，总计 112 bytes：
+物理参数 buffer 只在 renderer 创建时上传。TS 使用连续 36 个 `f32`，WGSL 使用 9 个 `vec4<f32>`，总计 144 bytes：
 
 | byte offset | WGSL 字段 | 内容 |
 | ---: | --- | --- |
@@ -126,6 +132,8 @@ coverage = 1 - smoothstep(
 | 64 | `ozone_absorption_center_height` | ozone absorption rgb、层中心高度 |
 | 80 | `ground_albedo_ozone_half_width` | 地表反照率 rgb、ozone 半宽 |
 | 96 | `solar_irradiance_w_m2_nm` | 太阳辐照度 RGB 波长采样，`W·m^-2·nm^-1`、padding |
+| 112 | `sky_spectral_to_linear_srgb` | 三波长天空辐亮度到线性 sRGB 的归一化系数、padding |
+| 128 | `sun_spectral_to_linear_srgb` | 三波长太阳辐亮度到线性 sRGB 的归一化系数、padding |
 
 逐帧 buffer 使用 8 个 `vec4<f32>`，总计 128 bytes：
 
@@ -138,7 +146,7 @@ coverage = 1 - smoothstep(
 | 64 | `sun_direction` | 太阳方向 xyz、padding |
 | 80 | `integration` | Reference 视线/太阳步数、Production 标志、多重散射开关 |
 | 96 | `quality_debug` | Sky-View/Aerial 步数、debug view、3D slice |
-| 112 | `components` | Rayleigh、Mie、ozone 开关、padding |
+| 112 | `components` | Rayleigh、Mie、ozone 开关、高频逐像素路径标志 |
 
 ## 生命周期与错误
 
@@ -152,6 +160,8 @@ Multi-Scattering LUT 使用 Hillaire 2020 §5.5 的 `(sunCosine, altitude)` 参�
 
 Sky-View 使用 192×108 的 Hillaire 分段平方地平线映射，只在相机位于大气内时生成和读取。其 dirty key 只包含观察半径、太阳天顶余弦和多重散射开关。大气外 Production 不复用该映射：每个命中大气壳的像素只积分大气顶入口到大气出口或地表的实际介质路径，太阳透射和多重散射分别查询共享 Transmittance 与 Multi-Scattering LUT；显式 Reference 模式仍使用视线与太阳路径嵌套积分。
 
+大气内 High 质量或垂直 FOV 不大于 `20°` 时同样不读取 Sky-View/Aerial 缓存，最终像素直接积分到地表或大气顶，并复用 Transmittance 与 Multi-Scattering LUT。该路径用于太阳前向散射峰、晨昏阴影和窄 FOV 放大后的角向高频结构；Low/Medium 广角继续使用缓存路径。
+
 Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一个保存 RGB 入射散射辐亮度 `L`，另一个保存无量纲 RGB 透射率 `T`，不把六个通道模糊地压入普通 RGBA。每条屏幕射线的 `z` 切片对应 `distance = boundaryDistance × z²`，其中 boundary 是该射线最先到达的地表或大气顶。当前地表 Production 合成严格使用 `surfaceRadiance × T + L`；纯地表四邻域使用归一化的地表类 froxel 插值。地表切线附近根据 Aerial 角向 texel 的 X/Y 联合判别式足迹建立连续逐像素积分带，斜向边界不会退化为单轴宽度；Aerial `L/T` 调试视图也使用这一重建边界，禁止用离散 froxel 分类单元切换算法或混合终点语义不同的样本。
 
 ## 质量与调试
@@ -159,12 +169,12 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 - Reference：48 个视线路径样本、24 个太阳路径样本，始终为单次散射直接积分。
 - Low：Sky-View 12 步、Aerial Perspective 6 步。
 - Medium：Sky-View 20 步、Aerial Perspective 10 步。
-- High：Sky-View 32 步、Aerial Perspective 16 步。
+- High：48 步逐像素积分；其 LUT 仍以 Sky-View 32 步、Aerial Perspective 16 步生成供调试视图使用。
 - 默认使用 Medium、Multi-Scattering 和曝光 10；曝光只属于最终显示标定，不改变物理参数或 LUT 能量。
 - Multi-Scattering 可在 Production 独立关闭；Reference 始终禁用该开关，关闭后可在相同物理参数与相同单次散射阶数下比较 Reference/Production。
 - 调试视图覆盖 Transmittance、Multi-Scattering、Sky-View、Aerial `L`、Aerial `T` 和 Rayleigh/Mie/ozone density。
 - 设备支持 `timestamp-query` 时，每 500 ms 低频读取一次实际执行 pass 的 GPU 时间；不支持时只显示 CPU submit，二者不会混称。
-- Ground noon、sunset、twilight 与 space limb 按钮固定 Reference 相机预设和太阳角；`斜向切线 45°` 摄像机预设固定 20 km 高度与屏幕切线角，`斜向晨昏线` 场景进一步固定 Medium Production、太阳方位 92° 和高度 −10.5°，作为 Aerial 边界的重复视觉比较入口。
+- 固定视觉基准覆盖地表局部太阳高度 `+5°/0°/−1°/−6°/−12°/−18°`、`5°/10°` 窄 FOV 太阳、20 km 高空晨昏、400 km 太空 limb 和深空行星盘晨昏。页面同时显示相机位置处的局部太阳高度，避免把世界 XY 高度角误当成当地太阳高度。
 
 ## 公式与依据
 
@@ -173,6 +183,8 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 | density / extinction | 指数 Rayleigh/Mie、三角 ozone；`σt = σr + σm,ext + σozone` | Hillaire 2020 Table 1；Bruneton 2017 definitions |
 | Transmittance | `T = exp(-∫σt ds)`，Bruneton 非线性 `(r, μ)` 映射 | Bruneton 2017 transmittance functions |
 | 单次散射 | `∫Tview Tsun (σr pr + σm pm) E ds` | Hillaire 2020 Eq. 1-3 |
+| 有限太阳圆盘 | 均匀圆盘被几何地平线分割后的面积与一阶矩 | 解析圆弓形积分；太阳角半径仍来自统一大气参数 |
+| 光谱显示近似 | 680/550/440 nm sky/sun 辐亮度权重，线性 sRGB 后执行显示转换 | Bruneton 2017 `ComputeSpectralRadianceToLuminanceFactors` |
 | Multi-Scattering | `Ψms = L2 / (1-fms)`，`u=(μs+1)/2`、`v=altitude/height` | Hillaire 2020 Eq. 5-11、§5.5 |
 | Sky-View | 地平线上下分段平方映射，仅供大气内观察者 | Hillaire 2020 §5.3；官方 `RenderSkyCommon.hlsl` |
 | Aerial Perspective | 独立 RGB `L/T`，`distance=boundary×slice²` | Hillaire 2020 §5.4；最终 `scene×T+L` |
@@ -181,6 +193,7 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 
 - 已有 Reference Rayleigh、Mie、ozone、Beer-Lambert 和单次散射直接积分。
 - 已建立 Transmittance、Multi-Scattering、Sky-View、双 3D Aerial Perspective 与地表最终合成。
+- 已接入 Bruneton 三波长显示近似、有限太阳圆盘遮挡和 High/窄 FOV 逐像素 Production 路径；完整多波长、多阶散射离线 Reference 仍未建立。
 - 大气外 Production 已使用逐像素单层视线积分，并复用 Transmittance 与 Multi-Scattering LUT；低分辨率 Outside View LUT 尚未实现。
 - 固定场景已有可重复入口，但 Reference/Production 像素误差尚未由 GPU readback 自动量化。
 - `rgba16float` storage 与 32³ texture limit 仍需在实际目标设备验证；读取采用 `textureLoad` 手工插值，不依赖 `float16-filterable`。

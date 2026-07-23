@@ -14,10 +14,12 @@ export interface AtmosphereParameters {
   ozoneLayerHalfWidthKm: number
   groundAlbedoLinear: Vec3
   solarIrradianceWattsPerSquareMeterPerNm: Vec3
+  skySpectralRadianceToLinearSrgb: Vec3
+  sunSpectralRadianceToLinearSrgb: Vec3
   sunAngularRadiusRadians: number
 }
 
-export const ATMOSPHERE_UNIFORM_FLOAT_COUNT = 28
+export const ATMOSPHERE_UNIFORM_FLOAT_COUNT = 36
 export const ATMOSPHERE_UNIFORM_BYTE_SIZE =
   ATMOSPHERE_UNIFORM_FLOAT_COUNT * Float32Array.BYTES_PER_ELEMENT
 
@@ -39,6 +41,17 @@ export const EARTH_ATMOSPHERE: Readonly<AtmosphereParameters> = Object.freeze({
   ozoneLayerHalfWidthKm: 15,
   groundAlbedoLinear: [0.1, 0.1, 0.1],
   solarIrradianceWattsPerSquareMeterPerNm: [1.474, 1.8504, 1.91198],
+  // Bruneton 的 680/550/440 nm 三波长近似，按绿色通道归一化以保留现有曝光尺度。
+  skySpectralRadianceToLinearSrgb: [
+    1.61241675724958,
+    1,
+    0.915919977840971,
+  ],
+  sunSpectralRadianceToLinearSrgb: [
+    1.40438326786415,
+    1,
+    0.950262087132401,
+  ],
   sunAngularRadiusRadians: 0.004675,
 } satisfies AtmosphereParameters)
 
@@ -96,6 +109,8 @@ export function serializeAtmosphereParameters(
     parameters.mieExtinctionPerKm,
     parameters.ozoneAbsorptionPerKm,
     parameters.solarIrradianceWattsPerSquareMeterPerNm,
+    parameters.skySpectralRadianceToLinearSrgb,
+    parameters.sunSpectralRadianceToLinearSrgb,
   ]
 
   if (
@@ -105,6 +120,17 @@ export function serializeAtmosphereParameters(
     )
   ) {
     throw new Error('大气光谱参数必须由有限非负分量组成。')
+  }
+
+  if (
+    parameters.skySpectralRadianceToLinearSrgb.some(
+      (component) => component <= 0,
+    ) ||
+    parameters.sunSpectralRadianceToLinearSrgb.some(
+      (component) => component <= 0,
+    )
+  ) {
+    throw new Error('光谱到线性 sRGB 的转换系数必须为有限正数。')
   }
 
   if (
@@ -140,6 +166,10 @@ export function serializeAtmosphereParameters(
     ...parameters.groundAlbedoLinear,
     parameters.ozoneLayerHalfWidthKm,
     ...parameters.solarIrradianceWattsPerSquareMeterPerNm,
+    0,
+    ...parameters.skySpectralRadianceToLinearSrgb,
+    0,
+    ...parameters.sunSpectralRadianceToLinearSrgb,
     0,
   ])
 }
