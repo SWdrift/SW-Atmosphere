@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { EARTH_ATMOSPHERE } from './atmosphere/AtmosphereParameters.ts'
 import {
   AtmosphereRenderer,

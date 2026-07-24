@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
 import shaderCode from './shader.wgsl?raw'
 
 const canvas = ref<HTMLCanvasElement | null>(null)

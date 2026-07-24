@@ -2,6 +2,12 @@
 
 本文件适用于 `apps/examples`。进入 `src/pages` 后，还必须同时遵循该目录更具体的 `AGENTS.md`。
 
+## 样式与组件
+
+- 样式以 Element Plus 默认和紧凑风格为基准，实用性与功能性优先。
+- 样式保持最简，不添加无用或无意义的装饰性样式，以减少 CSS 长度和维护成本。
+- 能使用 Element Plus 组件实现的界面元素，不使用原生 HTML 控件；目标是统一交互与视觉。原生元素仅用于 Element Plus 没有对应能力的语义结构或底层能力，例如 `canvas`。
+
 ## Command and Verification
 
 以下命令从仓库根目录执行：
