@@ -15,11 +15,16 @@ pnpm --filter examples build
 pnpm --filter examples test
 ```
 
+测试使用 Vitest。文件或模块级测试与源码同目录同名；跨模块测试位于本目录的 `test/`。
+
 ## 操作
 
 - Free flight：点击 canvas 进入 Pointer Lock。相机使用 Body/Look Rig：鼠标修改相对 Body 局部天顶的 yaw/pitch，pitch 限制为 ±89°；`Q/E` 绕当前最终视线旋转整个 Body，局部 right/up、局部天顶和屏幕随之一起偏转，lookYaw/lookPitch 保持不变。因此任意 Q/E 后鼠标操作与默认姿态同构。`W/S` 沿最终 local forward、`A/D` 沿最终 local right。`Shift` 加速，`Ctrl` 减速，滚轮调整速度指数。
 - Orbit：拖动或使用 `WASD` 调整绕世界 `+Z` 的方位角与轨道仰角，仰角在极点前限制为 ±89°，避免视线与世界 up 共线；摄像机始终看向世界原点且不产生 roll。滚轮或 `Q/E` 改变轨道半径。
 - 预设不会切换控制模式；高空、低轨和深空预设朝向行星中心。
+- “验证用例”使用 `/planetary-atmosphere/presets/:caseId` 深链接。点击按钮、直接访问、刷新和浏览器前进后退都由同一路由入口激活完整场景；离开“预设”标签页后取消激活，但不擅自恢复页面参数。
+- 激活验证用例后会显示对应参考图，可调整透明度。参考图只比较用例注明的自然层次，不用于逐像素拟合；图片保持原始宽高比。
+- `地表晨昏线 60°` 提供 Production、Reference、Aerial L 串行对照路径；`太空大气边缘` 提供从 400 km 到 800 km 的确定性 limb 移动路径。路径执行期间禁用冲突的人工相机输入。
 - `全局 XYZ 网格` 固定在世界原点，可切换 XY、XZ、YZ 平面；X 永远为红色、Y 为绿色、Z 为蓝色，不跟随摄像机或地表法线移动。网格由独立透明 2D canvas 投影，不参与 WebGPU shader、深度和 tone mapping；右上角朝向标始终可见。
 - `天空经纬网格` 是无限远世界方向层，不是大气渲染所使用的天空盒。纬度相对世界 XY 平面，经度绕世界 `+Z`，青色赤道为纬度 `0°`，黄色主经线为经度 `0°`（世界 `+Y`）。它不读取摄像机位置，可用于直接检查视角旋转的方向和连续性。
 
@@ -28,6 +33,8 @@ pnpm --filter examples test
 页面内置 `[CameraViewJumpProbe]` 控制台探针。它逐帧比较摄像机 `forward/right/up`，并累计同一帧鼠标或键盘提供的角度预算；单帧变化达到 `8°`，或实际变化明显超过输入预算时，会输出跳变原因、模式、Pointer Lock、原始输入、Orbit 方位/仰角、位置和变化前后的完整摄像机基。
 
 Pointer Lock 单个 `mousemove` 的位移长度超过 `64px` 时视为浏览器异常输入，控制器会丢弃该事件并输出 `[CameraInputOutlier]`。这只过滤离散输入尖峰，不对正常鼠标输入做平滑、插值或阻尼。
+
+页面运行后通过 `window.atmosphereWorkbench` 暴露只读快照和最小操作 API：`activateCase(id)`、`deactivateCase()`、`runPath(id)`、`stopPath()`、`getSnapshot()`。每个动作路径检查点还会派发 `atmosphere-workbench-checkpoint` 事件，事件 `detail` 是当时的可序列化快照，供浏览器截图或自动化消费。
 
 ## 坐标约定
 
@@ -55,8 +62,11 @@ normalize(
 ## 数据流
 
 ```text
-Vue 生命周期和控件
-  → CameraController（DOM 输入、速度、模式、预设）
+Pinia AtmosphereStore（控制参数唯一真相、低频运行快照）
+  → Vue 控制面板（只消费状态和发出操作）
+  → useAtmosphereScene（Vue 生命周期适配）
+  → AtmosphereScene（场景资源、更新/渲染循环、遥测发布）
+  → CameraController（DOM 输入、速度、Free/Orbit 模式）
   → PlanetCamera（位置、单位四元数、全局正交基、防穿地）
   → AtmosphereRenderer（WebGPU 资源、uniform、compute/render pass）
   → Transmittance LUT（256×64，RGB 透射率）
@@ -70,11 +80,11 @@ Vue 生命周期和控件
   → canvas
 
 PlanetCamera
-  → DebugOverlay（全局网格投影、近面裁剪、XYZ 朝向标）
+  → scene/DebugOverlay（全局网格投影、近面裁剪、XYZ 朝向标）
   → transparent 2D canvas
 ```
 
-`AtmosphereParameters.ts` 是底部/顶部半径、Rayleigh/Mie、ozone、地表反照率和太阳参数的唯一来源，并负责 fail-fast 校验与 GPU 序列化。摄像机初始高度和最低高度由 `CameraController.ts` 定义，不混入大气物理参数。
+`AtmosphereParameters.ts` 是底部/顶部半径、Rayleigh/Mie、ozone、地表反照率和太阳参数的唯一来源，并负责 fail-fast 校验与 GPU 序列化。摄像机预设和初始高度由 `camera/cameraPresets.ts` 定义，最低高度由 `CameraController.ts` 定义，不混入大气物理参数。右侧功能菜单的控制参数由 `model/atmosphereStore.ts` 集中维护；场景内部的摄像机姿态、速度积分和 GPU 资源不进入 Vue 响应式状态。
 
 ## 球交
 
@@ -209,9 +219,13 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 4. `math/raySphere.ts`
 5. `camera/PlanetCamera.ts`
 6. `camera/orbitCoordinates.ts`
-7. `camera/CameraController.ts`
-8. `atmosphere/shaders/stageOne.wgsl`
-9. `atmosphere/AtmosphereLutPipeline.ts`
-10. `atmosphere/GpuTimestampRecorder.ts`
-11. `atmosphere/AtmosphereRenderer.ts`
-12. `index.vue`
+7. `camera/cameraPresets.ts`
+8. `camera/CameraController.ts`
+9. `model/atmosphereState.ts`
+10. `model/atmosphereStore.ts`
+11. `scene/AtmosphereScene.ts`
+12. `atmosphere/shaders/stageOne.wgsl`
+13. `atmosphere/AtmosphereLutPipeline.ts`
+14. `atmosphere/GpuTimestampRecorder.ts`
+15. `atmosphere/AtmosphereRenderer.ts`
+16. `index.vue`

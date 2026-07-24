@@ -2,7 +2,7 @@
   "extends": "@vue/tsconfig/tsconfig.dom.json",
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
-    "types": ["node", "vite/client"],
+    "types": ["vitest/globals", "vite/client"],
     "module": "preserve",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -13,7 +13,7 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": [
-    "tests/**/*.ts",
-    "src/pages/planetary-atmosphere/**/*.ts"
+    "src/pages/planetary-atmosphere/**/*.test.ts",
+    "src/pages/planetary-atmosphere/test/**/*.ts"
   ]
 }

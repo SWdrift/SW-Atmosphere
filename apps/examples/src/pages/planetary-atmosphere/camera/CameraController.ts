@@ -1,9 +1,7 @@
 import {
   altitudeFromPosition,
-  INITIAL_CAMERA_RADIAL,
   WORLD_UP,
 } from '../math/coordinates.ts'
-import type { Quaternion } from '../math/quaternion.ts'
 import {
   add,
   dot,
@@ -14,6 +12,12 @@ import {
   scale,
   type Vec3,
 } from '../math/vector3.ts'
+import {
+  cameraPresetPose,
+  type CameraPresetId,
+  type CameraPresetPose,
+} from './cameraPresets.ts'
+import { CameraViewProbe } from './CameraViewProbe.ts'
 import {
   freeViewBasis,
   freeViewFromBasis,
@@ -31,82 +35,9 @@ import { PlanetCamera } from './PlanetCamera.ts'
 
 export type CameraMode = 'free' | 'orbit'
 
-export const INITIAL_CAMERA_ALTITUDE_KM = 1.5
 export const MINIMUM_CAMERA_ALTITUDE_KM = 0.01
 
-export const CAMERA_PRESETS = [
-  {
-    id: 'surface',
-    label: '地表',
-    altitudeKm: INITIAL_CAMERA_ALTITUDE_KM,
-    view: 'tangent',
-    rollDegrees: 0,
-  },
-  {
-    id: 'twenty-km',
-    label: '20 km',
-    altitudeKm: 20,
-    view: 'tangent',
-    rollDegrees: 0,
-  },
-  {
-    id: 'tilted-tangent',
-    label: '斜向切线 45°',
-    altitudeKm: 20,
-    view: 'tangent',
-    rollDegrees: 45,
-  },
-  {
-    id: 'karman-line',
-    label: '100 km',
-    altitudeKm: 100,
-    view: 'planet',
-    rollDegrees: 0,
-  },
-  {
-    id: 'low-orbit',
-    label: '低轨',
-    altitudeKm: 400,
-    view: 'planet',
-    rollDegrees: 0,
-  },
-  {
-    id: 'space-limb',
-    label: '太空边缘',
-    altitudeKm: 400,
-    view: 'limb',
-    rollDegrees: 0,
-  },
-  {
-    id: 'deep-space',
-    label: '深空',
-    altitudeKm: 30_000,
-    view: 'planet',
-    rollDegrees: 0,
-  },
-] as const
-
-export type CameraPresetId = (typeof CAMERA_PRESETS)[number]['id']
-
 const MAX_LOCKED_MOUSE_DELTA = 64
-
-interface ViewProbeSnapshot {
-  position: Vec3
-  forward: Vec3
-  right: Vec3
-  up: Vec3
-  freeBodyOrientation: Quaternion
-  freeLookYawRadians: number
-  freeLookPitchRadians: number
-  orbitAngles: OrbitAngles
-}
-
-interface ViewProbeInput {
-  source: 'free-mouse' | 'free-keyboard' | 'orbit-pointer' | 'orbit-keyboard' | 'mode' | 'preset'
-  movementX: number
-  movementY: number
-  timestamp: number
-}
 
 export function automaticSpeedKmPerSecond(altitudeKm: number): number {
   if (!Number.isFinite(altitudeKm)) {
@@ -120,17 +51,19 @@ export class CameraController {
   readonly camera: PlanetCamera
 
   mode: CameraMode = 'free'
-  speedExponent = 0
   actualSpeedKmPerSecond = 0
   targetSpeedKmPerSecond = 0
 
   private readonly canvas: HTMLCanvasElement
   private readonly planetRadiusKm: number
+  private readonly adjustSpeedExponent: (delta: number) => void
   private readonly pressedKeys = new Set<string>()
   private localVelocityKmPerSecond: Vec3 = [0, 0, 0]
   private pendingFreeLookRotationRadians: Vec3 = [0, 0, 0]
   private freeView: FreeView
+  private freePositionBeforeOrbit: Vec3 | null = null
   private attached = false
+  private manualInputEnabled = true
   private orbitDragging = false
   private discardNextLockedPointerMove = false
   private orbitAngles: OrbitAngles = {
@@ -139,14 +72,13 @@ export class CameraController {
   }
   private orbitRadiusKm = 0
   private targetOrbitRadiusKm = 0
-  private viewProbeSnapshot: ViewProbeSnapshot | null = null
-  private viewProbeInputBudgetRadians = 0
-  private lastViewProbeInput: ViewProbeInput | null = null
+  private readonly viewProbe = new CameraViewProbe()
 
   constructor(
     canvas: HTMLCanvasElement,
     camera: PlanetCamera,
     planetRadiusKm: number,
+    adjustSpeedExponent: (delta: number) => void,
   ) {
     if (!Number.isFinite(planetRadiusKm) || planetRadiusKm <= 0) {
       throw new Error('摄像机控制器的行星半径必须是有限正数。')
@@ -155,6 +87,7 @@ export class CameraController {
     this.canvas = canvas
     this.camera = camera
     this.planetRadiusKm = planetRadiusKm
+    this.adjustSpeedExponent = adjustSpeedExponent
     this.freeView = freeViewFromBasis(camera.forward, camera.up)
     this.initializeOrbitFromCamera()
   }
@@ -208,16 +141,20 @@ export class CameraController {
 
     this.mode = mode
     this.resetInput()
-    this.viewProbeInputBudgetRadians = 0
-    this.lastViewProbeInput = {
+    this.viewProbe.resetInput({
       source: 'mode',
       movementX: 0,
       movementY: 0,
       timestamp: performance.now(),
-    }
+    })
 
     if (mode === 'orbit') {
-      if (document.pointerLockElement === this.canvas) {
+      this.freePositionBeforeOrbit = [...this.camera.position]
+
+      if (
+        this.attached &&
+        document.pointerLockElement === this.canvas
+      ) {
         document.exitPointerLock()
       }
 
@@ -226,75 +163,79 @@ export class CameraController {
       return
     }
 
-    this.initializeFreeViewFromCamera()
-    this.applyFreeView()
-  }
-
-  setSpeedExponent(exponent: number): void {
-    if (!Number.isFinite(exponent) || exponent < -4 || exponent > 6) {
-      throw new Error('速度指数必须位于 -4 到 6。')
+    if (this.freePositionBeforeOrbit === null) {
+      throw new Error('退出 Orbit 时缺少进入前的 Free 摄像机位置。')
     }
 
-    this.speedExponent = exponent
+    const basis = freeViewBasis(this.freeView)
+    this.camera.setPose(
+      this.freePositionBeforeOrbit,
+      basis.forward,
+      basis.up,
+    )
+    this.freePositionBeforeOrbit = null
   }
 
   applyPreset(id: CameraPresetId): void {
-    const preset = CAMERA_PRESETS.find((candidate) => candidate.id === id)
+    const pose = cameraPresetPose(id, this.planetRadiusKm)
 
-    if (!preset) {
-      throw new Error(`未知摄像机预设：${id}`)
-    }
-
-    const radius = this.planetRadiusKm + preset.altitudeKm
-    const position = scale(INITIAL_CAMERA_RADIAL, radius)
-    let forward: Vec3
-    let up = WORLD_UP
-
-    if (preset.view === 'tangent') {
-      forward = [1, 0, 0]
-    } else if (preset.view === 'limb') {
-      forward = [
-        0,
-        Math.sqrt(1 - (this.planetRadiusKm / radius) ** 2),
-        this.planetRadiusKm / radius,
-      ]
-    } else {
-      forward = scale(INITIAL_CAMERA_RADIAL, -1)
-    }
-
-    if (preset.rollDegrees !== 0) {
-      const rollRadians = (preset.rollDegrees * Math.PI) / 180
-      const baseRight = normalize(projectOntoPlane(
-        INITIAL_CAMERA_RADIAL,
-        forward,
-      ))
-      up = add(
-        scale(baseRight, Math.sin(rollRadians)),
-        scale(WORLD_UP, Math.cos(rollRadians)),
-      )
-    }
-
-    this.camera.setPose(position, forward, up)
-    this.viewProbeInputBudgetRadians = 0
-    this.lastViewProbeInput = {
+    this.setPose(pose)
+    this.viewProbe.resetInput({
       source: 'preset',
       movementX: 0,
       movementY: 0,
       timestamp: performance.now(),
-    }
-    this.localVelocityKmPerSecond = [0, 0, 0]
-    this.actualSpeedKmPerSecond = 0
-    this.initializeFreeViewFromCamera()
-    this.initializeOrbitFromCamera()
-
+    })
     if (this.mode === 'orbit') {
       this.applyOrbitPose()
     }
   }
 
-  update(deltaSeconds: number): void {
+  setPose(pose: CameraPresetPose): void {
+    this.camera.setPose(pose.position, pose.forward, pose.up)
+    this.resetInput()
+
+    if (this.mode === 'free') {
+      this.initializeFreeViewFromCamera()
+    }
+    this.initializeOrbitFromCamera()
+  }
+
+  getPose(): CameraPresetPose {
+    return {
+      position: [...this.camera.position],
+      forward: [...this.camera.forward],
+      up: [...this.camera.up],
+    }
+  }
+
+  setManualInputEnabled(enabled: boolean): void {
+    if (enabled === this.manualInputEnabled) {
+      return
+    }
+
+    this.manualInputEnabled = enabled
+    this.resetInput()
+
+    if (
+      !enabled &&
+      this.attached &&
+      document.pointerLockElement === this.canvas
+    ) {
+      document.exitPointerLock()
+    }
+  }
+
+  update(deltaSeconds: number, speedExponent: number): void {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0) {
       throw new Error('帧间隔必须是有限非负数。')
+    }
+    if (
+      !Number.isFinite(speedExponent) ||
+      speedExponent < -4 ||
+      speedExponent > 6
+    ) {
+      throw new Error('速度指数必须位于 -4 到 6。')
     }
 
     if (deltaSeconds === 0) {
@@ -302,8 +243,13 @@ export class CameraController {
       return
     }
 
+    if (!this.manualInputEnabled) {
+      this.probeViewContinuity(deltaSeconds)
+      return
+    }
+
     if (this.mode === 'free') {
-      this.updateFreeFlight(deltaSeconds)
+      this.updateFreeFlight(deltaSeconds, speedExponent)
     } else {
       this.updateOrbit(deltaSeconds)
     }
@@ -311,7 +257,10 @@ export class CameraController {
     this.probeViewContinuity(deltaSeconds)
   }
 
-  private updateFreeFlight(deltaSeconds: number): void {
+  private updateFreeFlight(
+    deltaSeconds: number,
+    speedExponent: number,
+  ): void {
     const rollSpeedRadiansPerSecond = 0.8
     let rollDeltaRadians = 0
 
@@ -335,13 +284,15 @@ export class CameraController {
 
     if (rollDeltaRadians !== 0) {
       this.freeView = rollFreeBody(this.freeView, rollDeltaRadians)
-      this.viewProbeInputBudgetRadians += Math.abs(rollDeltaRadians)
-      this.lastViewProbeInput = {
-        source: 'free-keyboard',
-        movementX: rollDeltaRadians,
-        movementY: 0,
-        timestamp: performance.now(),
-      }
+      this.viewProbe.recordInput(
+        {
+          source: 'free-keyboard',
+          movementX: rollDeltaRadians,
+          movementY: 0,
+          timestamp: performance.now(),
+        },
+        Math.abs(rollDeltaRadians),
+      )
     }
 
     if (hasLookRotation || rollDeltaRadians !== 0) {
@@ -359,7 +310,7 @@ export class CameraController {
         : 1)
 
     this.targetSpeedKmPerSecond =
-      automaticSpeedKmPerSecond(altitudeKm) * 2 ** this.speedExponent * speedModifier
+      automaticSpeedKmPerSecond(altitudeKm) * 2 ** speedExponent * speedModifier
 
     let desiredLocalDirection: Vec3 = [0, 0, 0]
 
@@ -428,14 +379,15 @@ export class CameraController {
     if (this.pressedKeys.has('KeyE')) this.targetOrbitRadiusKm *= Math.exp(-deltaSeconds)
 
     if (yawRadians !== 0 || pitchRadians !== 0) {
-      this.viewProbeInputBudgetRadians +=
-        Math.abs(yawRadians) + Math.abs(pitchRadians)
-      this.lastViewProbeInput = {
-        source: 'orbit-keyboard',
-        movementX: yawRadians,
-        movementY: pitchRadians,
-        timestamp: performance.now(),
-      }
+      this.viewProbe.recordInput(
+        {
+          source: 'orbit-keyboard',
+          movementX: yawRadians,
+          movementY: pitchRadians,
+          timestamp: performance.now(),
+        },
+        Math.abs(yawRadians) + Math.abs(pitchRadians),
+      )
     }
 
     this.rotateOrbit(yawRadians, pitchRadians)
@@ -505,67 +457,14 @@ export class CameraController {
   }
 
   private probeViewContinuity(deltaSeconds: number): void {
-    const snapshot: ViewProbeSnapshot = {
-      position: [...this.camera.position],
-      forward: this.camera.forward,
-      right: this.camera.right,
-      up: this.camera.up,
-      freeBodyOrientation: this.freeView.bodyOrientation,
-      freeLookYawRadians: this.freeView.yawRadians,
-      freeLookPitchRadians: this.freeView.pitchRadians,
-      orbitAngles: { ...this.orbitAngles },
-    }
-    const previous = this.viewProbeSnapshot
-
-    if (previous) {
-      const angleDegrees = {
-        forward: this.vectorAngleDegrees(previous.forward, snapshot.forward),
-        right: this.vectorAngleDegrees(previous.right, snapshot.right),
-        up: this.vectorAngleDegrees(previous.up, snapshot.up),
-      }
-      const maximumAngleDegrees = Math.max(
-        angleDegrees.forward,
-        angleDegrees.right,
-        angleDegrees.up,
-      )
-      const inputBudgetDegrees =
-        (this.viewProbeInputBudgetRadians * 180) / Math.PI
-      const reasons: string[] = []
-
-      if (maximumAngleDegrees >= 8) {
-        reasons.push('单帧视角变化超过 8°')
-      }
-
-      if (
-        maximumAngleDegrees >= 0.5 &&
-        maximumAngleDegrees > inputBudgetDegrees + 0.25
-      ) {
-        reasons.push('视角变化超过本帧输入角度预算')
-      }
-
-      if (reasons.length > 0) {
-        console.warn('[CameraViewJumpProbe]', {
-          reasons,
-          mode: this.mode,
-          deltaSeconds,
-          pointerLocked: document.pointerLockElement === this.canvas,
-          maximumAngleDegrees,
-          angleDegrees,
-          inputBudgetDegrees,
-          lastInput: this.lastViewProbeInput,
-          before: previous,
-          after: snapshot,
-        })
-      }
-    }
-
-    this.viewProbeSnapshot = snapshot
-    this.viewProbeInputBudgetRadians = 0
-  }
-
-  private vectorAngleDegrees(a: Vec3, b: Vec3): number {
-    const cosine = Math.max(-1, Math.min(1, dot(a, b)))
-    return (Math.acos(cosine) * 180) / Math.PI
+    this.viewProbe.sample({
+      camera: this.camera,
+      freeView: this.freeView,
+      orbitAngles: this.orbitAngles,
+      mode: this.mode,
+      deltaSeconds,
+      pointerLocked: document.pointerLockElement === this.canvas,
+    })
   }
 
   private resetInput(): void {
@@ -578,11 +477,19 @@ export class CameraController {
 
   private hasKeyboardFocus(): boolean {
     return (
-      document.pointerLockElement === this.canvas || document.activeElement === this.canvas
+      this.manualInputEnabled &&
+      (
+        document.pointerLockElement === this.canvas ||
+        document.activeElement === this.canvas
+      )
     )
   }
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (!this.manualInputEnabled) {
+      return
+    }
+
     this.canvas.focus()
 
     if (this.mode === 'free') {
@@ -603,7 +510,11 @@ export class CameraController {
   private readonly onMouseMove = (event: MouseEvent): void => {
     const sensitivity = 0.0025
 
-    if (this.mode !== 'free' || document.pointerLockElement !== this.canvas) {
+    if (
+      !this.manualInputEnabled ||
+      this.mode !== 'free' ||
+      document.pointerLockElement !== this.canvas
+    ) {
       return
     }
 
@@ -636,14 +547,16 @@ export class CameraController {
       return
     }
 
-    this.viewProbeInputBudgetRadians +=
-      (Math.abs(event.movementX) + Math.abs(event.movementY)) * sensitivity
-    this.lastViewProbeInput = {
-      source: 'free-mouse',
-      movementX: event.movementX,
-      movementY: event.movementY,
-      timestamp: event.timeStamp,
-    }
+    this.viewProbe.recordInput(
+      {
+        source: 'free-mouse',
+        movementX: event.movementX,
+        movementY: event.movementY,
+        timestamp: event.timeStamp,
+      },
+      (Math.abs(event.movementX) + Math.abs(event.movementY)) *
+        sensitivity,
+    )
     this.pendingFreeLookRotationRadians = add(
       this.pendingFreeLookRotationRadians,
       [
@@ -655,19 +568,25 @@ export class CameraController {
   }
 
   private readonly onPointerMove = (event: PointerEvent): void => {
-    if (this.mode !== 'orbit' || !this.orbitDragging) {
+    if (
+      !this.manualInputEnabled ||
+      this.mode !== 'orbit' ||
+      !this.orbitDragging
+    ) {
       return
     }
 
     const sensitivity = 0.0025
-    this.viewProbeInputBudgetRadians +=
-      (Math.abs(event.movementX) + Math.abs(event.movementY)) * sensitivity
-    this.lastViewProbeInput = {
-      source: 'orbit-pointer',
-      movementX: event.movementX,
-      movementY: event.movementY,
-      timestamp: event.timeStamp,
-    }
+    this.viewProbe.recordInput(
+      {
+        source: 'orbit-pointer',
+        movementX: event.movementX,
+        movementY: event.movementY,
+        timestamp: event.timeStamp,
+      },
+      (Math.abs(event.movementX) + Math.abs(event.movementY)) *
+        sensitivity,
+    )
     this.rotateOrbit(
       -event.movementX * sensitivity,
       event.movementY * sensitivity,
@@ -683,12 +602,14 @@ export class CameraController {
   }
 
   private readonly onWheel = (event: WheelEvent): void => {
+    if (!this.manualInputEnabled) {
+      return
+    }
+
     event.preventDefault()
 
     if (this.mode === 'free') {
-      this.setSpeedExponent(
-        Math.max(-4, Math.min(6, this.speedExponent - Math.sign(event.deltaY) * 0.25)),
-      )
+      this.adjustSpeedExponent(-Math.sign(event.deltaY) * 0.25)
       return
     }
 

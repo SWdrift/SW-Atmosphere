@@ -1,95 +1,83 @@
 <template>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <nav>
-        <RouterLink
+  <el-container class="app-shell">
+    <el-aside width="200px">
+      <el-menu router :default-active="activeExamplePath">
+        <el-menu-item
           v-for="page in examplePages"
           :key="page.path"
-          class="nav-link"
-          :to="page.path"
+          :index="page.path"
         >
           {{ page.name }}
-        </RouterLink>
-      </nav>
-    </aside>
+        </el-menu-item>
+      </el-menu>
+    </el-aside>
 
-    <main class="content">
+    <el-main>
       <RouterView />
-    </main>
-  </div>
+    </el-main>
+  </el-container>
 </template>
 
 <script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
 import { examplePages } from './router'
+
+const route = useRoute()
+const activeExamplePath = computed(() => {
+  const page = examplePages.find(
+    (candidate) =>
+      route.path === candidate.path ||
+      route.path.startsWith(`${candidate.path}/`),
+  )
+
+  return page?.path
+})
 </script>
 
 <style>
 :root {
-  font: 16px/1.55 Inter, ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
-  color: #202122;
-  background: #fff;
+  font-family: var(--el-font-family);
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
 }
 
 body {
   margin: 0;
 }
 
-a {
-  color: #36c;
-}
-
 h1 {
   margin: 0;
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 32px;
-  font-weight: 400;
-  line-height: 1.3;
-}
-
-p {
-  max-width: 760px;
-  margin: 0;
-  color: #202122;
+  font-size: 20px;
+  line-height: 32px;
 }
 
 #app {
-  min-height: 100vh;
+  height: 100vh;
 }
 
 .app-shell {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100%;
 }
 
-.sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  box-sizing: border-box;
-  border-right: 1px solid #a2a9b1;
-  background: #f8f9fa;
-  padding: 10px;
+.el-aside {
+  border-right: 1px solid var(--el-menu-border-color);
+  background: var(--el-bg-color-page);
 }
 
-nav {
-  display: flex;
-  flex-direction: column;
+.el-aside .el-menu {
+  border-right: 0;
 }
 
-.nav-link {
-  padding: 4px 0;
-  text-decoration: underline;
-}
-
-.nav-link:hover,
-.nav-link.router-link-active {
-  color: #202122;
-}
-
-.content {
+.el-main {
   min-width: 0;
-  padding: 10px;
+  height: 100%;
+  padding: 12px;
+  overflow: auto;
+}
+
+@media (max-width: 700px) {
+  .el-aside {
+    width: 140px !important;
+  }
 }
 </style>

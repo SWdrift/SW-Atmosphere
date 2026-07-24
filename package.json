@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "check:quick": "pnpm --filter examples check:quick && cargo wgsl"
+    "check:quick": "pnpm --filter examples check:quick && cd apps/examples/src/pages && cargo wgsl"
   },
   "devDependencies": {
     "@vue/tsconfig": "^0.9.1",

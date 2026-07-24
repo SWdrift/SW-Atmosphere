@@ -27,3 +27,17 @@
 运行 build 前，必须先说明触发 build 的具体原因。任务完成回复中必须说明实际运行的验证命令；若跳过 build，说明本次修改未涉及构建配置、依赖、路由入口、资源路径或部署行为。
 
 当前没有独立的 `lint` script。
+
+## 测试布局
+
+- 前端测试统一使用 Vitest。
+- 文件或单一模块级测试与源文件原地放置，使用同名 `*.test.ts`，例如 `math/raySphere.ts` 对应 `math/raySphere.test.ts`。
+- 跨模块、完整流程或较重的协作测试放在对应页面目录的 `test/` 下，名称表达被验证流程，例如 `planetary-atmosphere/test/workbench.test.ts`。
+- 不在 `apps/examples/tests/` 建立按页面聚合的单体测试文件。
+
+## Vue 自动导入
+
+- Vue Composition API（如 `ref`、`computed`、`watch`、生命周期函数）由 `unplugin-auto-import` 自动导入，Vue 单文件组件以及 `src` 下由 Vite 处理的 `.ts`、`.tsx` 文件内不要重复手写这些运行时 API 的 `vue` 导入。
+- Element Plus 组件可直接在模板中使用，Element Plus API 可直接在脚本中使用；两者分别由 `unplugin-vue-components` 和 `unplugin-auto-import` 按需导入，不要手写等价导入。
+- Node 直接执行的脚本、测试文件、Vite 配置等不经过 Vite 源码转换的文件仍须显式导入运行时 API。
+- 类型导入、应用入口使用的 `createApp`，以及插件未覆盖的导出项仍须显式导入。以 `src/auto-imports.d.ts` 和 `src/components.d.ts` 生成的声明为自动导入边界，不自行假设或补写全局声明。

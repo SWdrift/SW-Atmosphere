@@ -6,8 +6,7 @@ import {
   subtract,
   type Vec3,
 } from '../math/vector3.ts'
-
-export type DebugGridPlane = 'xy' | 'xz' | 'yz'
+import type { DebugGridPlane } from '../model/atmosphereState.ts'
 
 interface CameraPoint {
   x: number

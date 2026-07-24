@@ -1,5 +1,12 @@
-import { createApp } from 'vue'
-import App from './App.vue'
-import { router } from './router'
+import { createApp } from "vue";
+import { createPinia } from "pinia";
+import App from "./App.vue";
+import { router } from "./router";
 
-createApp(App).use(router).mount('#app')
+import ElementPlus from "element-plus";
+
+createApp(App)
+  .use(createPinia())
+  .use(router)
+  .use(ElementPlus, { size: "small" })
+  .mount("#app");
