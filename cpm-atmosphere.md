@@ -2,21 +2,10 @@
 
 本文件保存 `cp-atmosphere.md` 的可复用工程记忆；控制目标和活跃任务仍以 CP 为准。
 
-## 坐标与控制
+## 摄像机边界
 
-- 世界空间是右手 Z-up 笛卡尔坐标：`+X` 右、`+Y` 前、`+Z` 上，行星中心为原点。
-- 相机局部基为 `+X` right、`+Y` forward、`+Z` up；`PlanetCamera` 单位四元数是最终渲染姿态的唯一真相，renderer 只消费世界空间 `right/up/forward`。
-- Free 使用传统 Body/Look Rig：单位 `qBody` 定义人的局部 right/forward/up 与局部天顶，`lookYaw/lookPitch` 是相对 Body 的观察角，pitch 限制为 ±89°；最终姿态固定为 `qCamera = qBody × qYaw × qPitch`。
-- Q/E 绕当前最终 forward 旋转整个 Body，lookYaw/lookPitch 不变；鼠标只更新 Look，不修改 Body。因此偏转后的局部坐标、屏幕与局部天顶整体一致旋转，操作规律与默认姿态同构。最终姿态不得反解回控制状态。Orbit 单独使用世界 Z-up turntable 方位角、仰角和半径。
-- Free 的 WASD 缓动速度保存为相机局部分量，每帧再通过当前 right/forward/up 基转换到世界空间，避免横滚后残留旧世界方向。
-- 天空经纬 debug 是无限远方向层，不读取相机位置；它用于区分姿态跳变与位置/场景问题，不代表天空盒大气。
-- 星球、太阳、大气、世界 XYZ 网格和天空经纬方向都以世界空间为权威定义；GPU camera-relative 只平移数值原点，摄像机姿态只负责派生屏幕观察结果。
-
-## Pointer Lock
-
-- Windows Chromium 的 Pointer Lock 相对移动流可能偶发产生异常大的 `movementX/Y`。应先比较输入角度预算与相机基变化，不能先归因于四元数或坐标系。
-- 当前 Free 控制丢弃单事件长度超过 `64px` 的输入并输出 `[CameraInputOutlier]`；`[CameraViewJumpProbe]` 记录帧前后基向量、控制状态和输入预算。
-- 没有测量证据时，不用平滑、插值或阻尼掩盖输入尖峰。
+- 摄像机坐标、控制模式、Pointer Lock 和路径接入的可复用结论已迁移到 `cpm-atmosphere-camera.md`。
+- 大气渲染只消费世界空间摄像机基；GPU camera-relative 只平移数值原点，不改变世界轴或场景真相。
 
 ## 大气渲染实现决策
 

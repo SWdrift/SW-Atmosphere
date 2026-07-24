@@ -23,18 +23,16 @@ pnpm --filter examples test
 - Orbit：拖动或使用 `WASD` 调整绕世界 `+Z` 的方位角与轨道仰角，仰角在极点前限制为 ±89°，避免视线与世界 up 共线；摄像机始终看向世界原点且不产生 roll。滚轮或 `Q/E` 改变轨道半径。
 - 预设不会切换控制模式；高空、低轨和深空预设朝向行星中心。
 - “验证用例”使用 `/planetary-atmosphere/presets/:caseId` 深链接。点击按钮、直接访问、刷新和浏览器前进后退都由同一路由入口激活完整场景；离开“预设”标签页后取消激活，但不擅自恢复页面参数。
-- 激活验证用例后会显示对应参考图，可调整透明度。参考图只比较用例注明的自然层次，不用于逐像素拟合；图片保持原始宽高比。
+- 参考图是可选用例数据，默认不显示，混合比例默认 `0.5`；两项设置不随用例切换而变化，并通过 `reference=0|1`、`mix=0..1` 查询参数复现。图片保持原始宽高比，只比较用例注明的自然层次，不用于逐像素拟合。
 - `地表晨昏线 60°` 提供 Production、Reference、Aerial L 串行对照路径；`太空大气边缘` 提供从 400 km 到 800 km 的确定性 limb 移动路径。路径执行期间禁用冲突的人工相机输入。
 - `全局 XYZ 网格` 固定在世界原点，可切换 XY、XZ、YZ 平面；X 永远为红色、Y 为绿色、Z 为蓝色，不跟随摄像机或地表法线移动。网格由独立透明 2D canvas 投影，不参与 WebGPU shader、深度和 tone mapping；右上角朝向标始终可见。
 - `天空经纬网格` 是无限远世界方向层，不是大气渲染所使用的天空盒。纬度相对世界 XY 平面，经度绕世界 `+Z`，青色赤道为纬度 `0°`，黄色主经线为经度 `0°`（世界 `+Y`）。它不读取摄像机位置，可用于直接检查视角旋转的方向和连续性。
 
 失焦、退出 Pointer Lock、模式切换和组件卸载都会清空按键与速度状态。
 
-页面内置 `[CameraViewJumpProbe]` 控制台探针。它逐帧比较摄像机 `forward/right/up`，并累计同一帧鼠标或键盘提供的角度预算；单帧变化达到 `8°`，或实际变化明显超过输入预算时，会输出跳变原因、模式、Pointer Lock、原始输入、Orbit 方位/仰角、位置和变化前后的完整摄像机基。
-
 Pointer Lock 单个 `mousemove` 的位移长度超过 `64px` 时视为浏览器异常输入，控制器会丢弃该事件并输出 `[CameraInputOutlier]`。这只过滤离散输入尖峰，不对正常鼠标输入做平滑、插值或阻尼。
 
-页面运行后通过 `window.atmosphereWorkbench` 暴露只读快照和最小操作 API：`activateCase(id)`、`deactivateCase()`、`runPath(id)`、`stopPath()`、`getSnapshot()`。每个动作路径检查点还会派发 `atmosphere-workbench-checkpoint` 事件，事件 `detail` 是当时的可序列化快照，供浏览器截图或自动化消费。
+页面运行后通过 `window.atmosphereWorkbench` 暴露只读快照和最小操作 API：`activateCase(id)`、`deactivateCase()`、`runPath(id)`、`stopPath()`、`setReferenceVisible(visible)`、`setReferenceMix(mix)`、`getSnapshot()`。每个动作路径检查点还会派发 `atmosphere-workbench-checkpoint` 事件，事件 `detail` 是当时的可序列化快照，供浏览器截图或自动化消费。
 
 ## 坐标约定
 

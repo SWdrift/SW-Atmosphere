@@ -20,6 +20,11 @@ const activeValidationCase = computed(() =>
     (candidate) => candidate.id === store.workbench.activeCaseId,
   ),
 )
+const activeReference = computed(() =>
+  activeValidationCase.value === undefined
+    ? null
+    : activeValidationCase.value.reference,
+)
 </script>
 
 <template>
@@ -50,25 +55,25 @@ const activeValidationCase = computed(() =>
           ></canvas>
           <figure
             v-if="
-              activeValidationCase &&
+              activeReference &&
               store.workbench.referenceVisible
             "
             class="reference-overlay"
-            :style="{ opacity: store.workbench.referenceOpacity }"
+            :style="{ opacity: store.workbench.referenceMix }"
           >
             <img
-              :key="activeValidationCase.id"
-              :src="activeValidationCase.reference.src"
-              :alt="activeValidationCase.reference.label"
+              :key="activeReference.src"
+              :src="activeReference.src"
+              :alt="activeReference.label"
               @load="store.setReferenceLoaded(true)"
               @error="
                 store.setReferenceLoadFailed(
-                  `参考图加载失败：${activeValidationCase.reference.label}`,
+                  `参考图加载失败：${activeReference.label}`,
                 )
               "
             />
             <figcaption>
-              {{ activeValidationCase.reference.label }}
+              {{ activeReference.label }}
             </figcaption>
           </figure>
         </div>
@@ -95,6 +100,8 @@ const activeValidationCase = computed(() =>
             @activate-case="workbench.activateCase"
             @run-path="workbench.runPath"
             @stop-path="workbench.stopPath"
+            @set-reference-visible="workbench.setReferenceVisible"
+            @set-reference-mix="workbench.setReferenceMix"
           />
         </template>
 

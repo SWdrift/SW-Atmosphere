@@ -34,7 +34,7 @@ export const useAtmosphereStore = defineStore('planetary-atmosphere', {
       pathId: null as string | null,
       checkpoints: [] as string[],
       referenceVisible: false,
-      referenceOpacity: 0.5,
+      referenceMix: 0.5,
       referenceLoaded: false,
       errorMessage: '',
     },
@@ -107,7 +107,6 @@ export const useAtmosphereStore = defineStore('planetary-atmosphere', {
       this.workbench.activeCaseId = id
       this.workbench.pathId = null
       this.workbench.checkpoints = []
-      this.workbench.referenceVisible = true
       this.workbench.referenceLoaded = false
       this.workbench.errorMessage = ''
     },
@@ -117,7 +116,6 @@ export const useAtmosphereStore = defineStore('planetary-atmosphere', {
       this.workbench.activeCaseId = null
       this.workbench.pathId = null
       this.workbench.checkpoints = []
-      this.workbench.referenceVisible = false
       this.workbench.referenceLoaded = false
       this.workbench.errorMessage = message
     },
@@ -128,7 +126,6 @@ export const useAtmosphereStore = defineStore('planetary-atmosphere', {
       this.workbench.activeCaseId = null
       this.workbench.pathId = null
       this.workbench.checkpoints = []
-      this.workbench.referenceVisible = false
       this.workbench.referenceLoaded = false
       this.workbench.errorMessage = ''
     },
@@ -166,23 +163,19 @@ export const useAtmosphereStore = defineStore('planetary-atmosphere', {
     },
 
     setReferenceVisible(visible: boolean): void {
-      if (this.workbench.activeCaseId === null && visible) {
-        throw new Error('没有激活验证用例，不能显示参考图。')
-      }
-
       this.workbench.referenceVisible = visible
     },
 
-    setReferenceOpacity(opacity: number): void {
+    setReferenceMix(mix: number): void {
       if (
-        !Number.isFinite(opacity) ||
-        opacity < 0 ||
-        opacity > 1
+        !Number.isFinite(mix) ||
+        mix < 0 ||
+        mix > 1
       ) {
-        throw new Error('参考图透明度必须位于 0 到 1。')
+        throw new Error('参考图混合比例必须位于 0 到 1。')
       }
 
-      this.workbench.referenceOpacity = opacity
+      this.workbench.referenceMix = mix
     },
 
     setReferenceLoaded(loaded: boolean): void {

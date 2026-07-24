@@ -34,7 +34,7 @@ export interface ValidationCase {
   baseline: 'earth-clear'
   cameraPreset: CameraPresetId
   controls: ValidationControls
-  reference: ValidationReference
+  reference: ValidationReference | null
   path: WorkbenchPath | null
 }
 
@@ -244,7 +244,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 60, 95, 0, 10),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {
@@ -253,7 +253,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 60, 89, 0, 10),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {
@@ -262,7 +262,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 60, 84, 0, 10),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {
@@ -271,7 +271,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 60, 78, 0, 10),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {
@@ -280,7 +280,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 60, 72, 0, 10),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {
@@ -289,7 +289,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 5, 90, 0, 2),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {
@@ -298,7 +298,7 @@ export const VALIDATION_CASES = [
     baseline: 'earth-clear',
     cameraPreset: 'surface',
     controls: validationControls('high', 10, 90, 0, 2),
-    reference: TWILIGHT_REFERENCE,
+    reference: null,
     path: null,
   },
   {

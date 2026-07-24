@@ -14,6 +14,10 @@ import {
   validationCasePath,
 } from '../model/validationCases.ts'
 import {
+  referenceRouteQuery,
+  referenceRouteStateFromQuery,
+} from '../model/referenceRoute.ts'
+import {
   executeWorkbenchPath,
   type WorkbenchPathPort,
 } from '../model/workbenchPath.ts'
@@ -27,7 +31,11 @@ export interface AtmosphereWorkbenchSnapshot {
   phase: string
   pathId: string | null
   checkpoints: readonly string[]
-  referenceLoaded: boolean
+  reference: {
+    visible: boolean
+    mix: number
+    loaded: boolean
+  }
   canvas: {
     width: number
     height: number
@@ -43,6 +51,8 @@ export interface AtmosphereWorkbenchApi {
   deactivateCase(): Promise<void>
   runPath(id: string): Promise<void>
   stopPath(): void
+  setReferenceVisible(visible: boolean): Promise<void>
+  setReferenceMix(mix: number): Promise<void>
   getSnapshot(): AtmosphereWorkbenchSnapshot
 }
 
@@ -80,6 +90,8 @@ export function useAtmosphereScene(
     () => [
       route.path,
       route.params.caseId,
+      route.query.reference,
+      route.query.mix,
       store.runtime.phase,
     ] as const,
     () => {
@@ -152,6 +164,20 @@ export function useAtmosphereScene(
   }
 
   function syncRouteCase(): void {
+    let referenceState
+
+    try {
+      referenceState = referenceRouteStateFromQuery(route.query)
+    } catch (error) {
+      store.failValidationCase(
+        error instanceof Error ? error.message : String(error),
+      )
+      return
+    }
+
+    store.setReferenceVisible(referenceState.visible)
+    store.setReferenceMix(referenceState.mix)
+
     let panelId
 
     try {
@@ -350,7 +376,11 @@ export function useAtmosphereScene(
       phase: store.workbench.phase,
       pathId: store.workbench.pathId,
       checkpoints: [...store.workbench.checkpoints],
-      referenceLoaded: store.workbench.referenceLoaded,
+      reference: {
+        visible: store.workbench.referenceVisible,
+        mix: store.workbench.referenceMix,
+        loaded: store.workbench.referenceLoaded,
+      },
       canvas: {
         width: canvas.width,
         height: canvas.height,
@@ -364,17 +394,57 @@ export function useAtmosphereScene(
 
   const workbench: AtmosphereWorkbenchApi = {
     async activateCase(id): Promise<void> {
-      await router.push(validationCasePath(id))
+      await router.push({
+        path: validationCasePath(id),
+        query: referenceRouteQuery({
+          visible: store.workbench.referenceVisible,
+          mix: store.workbench.referenceMix,
+        }),
+      })
       await nextTick()
       syncRouteCase()
     },
     async deactivateCase(): Promise<void> {
-      await router.push('/planetary-atmosphere/presets')
+      await router.push({
+        path: '/planetary-atmosphere/presets',
+        query: referenceRouteQuery({
+          visible: store.workbench.referenceVisible,
+          mix: store.workbench.referenceMix,
+        }),
+      })
       await nextTick()
       deactivateCurrentCase()
     },
     runPath,
     stopPath,
+    async setReferenceVisible(visible): Promise<void> {
+      await router.replace({
+        path: route.path,
+        query: {
+          ...route.query,
+          ...referenceRouteQuery({
+            visible,
+            mix: store.workbench.referenceMix,
+          }),
+        },
+      })
+      await nextTick()
+      syncRouteCase()
+    },
+    async setReferenceMix(mix): Promise<void> {
+      await router.replace({
+        path: route.path,
+        query: {
+          ...route.query,
+          ...referenceRouteQuery({
+            visible: store.workbench.referenceVisible,
+            mix,
+          }),
+        },
+      })
+      await nextTick()
+      syncRouteCase()
+    },
     getSnapshot,
   }
 

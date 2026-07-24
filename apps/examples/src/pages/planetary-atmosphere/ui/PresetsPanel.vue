@@ -11,6 +11,8 @@ const emit = defineEmits<{
   'activate-case': [id: string]
   'run-path': [id: string]
   'stop-path': []
+  'set-reference-visible': [visible: boolean]
+  'set-reference-mix': [mix: number]
 }>()
 
 const store = useAtmosphereStore()
@@ -19,21 +21,26 @@ const activeValidationCase = computed(() =>
     (candidate) => candidate.id === store.workbench.activeCaseId,
   ),
 )
+const activeReference = computed(() =>
+  activeValidationCase.value === undefined
+    ? null
+    : activeValidationCase.value.reference,
+)
 
 function setReferenceVisible(value: string | number | boolean): void {
   if (typeof value !== 'boolean') {
     throw new Error('参考图显示状态必须是 boolean。')
   }
 
-  store.setReferenceVisible(value)
+  emit('set-reference-visible', value)
 }
 
-function setReferenceOpacity(value: number | number[]): void {
+function setReferenceMix(value: number | number[]): void {
   if (typeof value !== 'number') {
-    throw new Error('参考图透明度必须是单个数值。')
+    throw new Error('参考图混合比例必须是单个数值。')
   }
 
-  store.setReferenceOpacity(value)
+  emit('set-reference-mix', value)
 }
 </script>
 
@@ -78,32 +85,37 @@ function setReferenceOpacity(value: number | number[]): void {
       :closable="false"
     />
 
-    <template v-if="activeValidationCase">
-      <div class="reference-controls">
-        <el-checkbox
-          :model-value="store.workbench.referenceVisible"
-          @update:model-value="setReferenceVisible"
-        >
-          显示参考图
-        </el-checkbox>
-        <el-slider
-          :model-value="store.workbench.referenceOpacity"
-          :min="0"
-          :max="1"
-          :step="0.05"
-          :show-tooltip="false"
-          @update:model-value="setReferenceOpacity"
-        />
-        <output>
-          {{ store.workbench.referenceOpacity.toFixed(2) }}
-        </output>
-      </div>
+    <div class="reference-controls">
+      <el-checkbox
+        :model-value="store.workbench.referenceVisible"
+        @update:model-value="setReferenceVisible"
+      >
+        显示参考图
+      </el-checkbox>
+      <el-slider
+        :model-value="store.workbench.referenceMix"
+        :min="0"
+        :max="1"
+        :step="0.05"
+        :show-tooltip="false"
+        @update:model-value="setReferenceMix"
+      />
+      <output>
+        {{ store.workbench.referenceMix.toFixed(2) }}
+      </output>
+    </div>
 
-      <el-text size="small" type="info">
-        {{ activeValidationCase.reference.comparable }}
-      </el-text>
-      <el-text class="reference-note" size="small" type="info">
-        {{ activeValidationCase.reference.unknowns }}
+    <template v-if="activeValidationCase">
+      <template v-if="activeReference">
+        <el-text size="small" type="info">
+          {{ activeReference.comparable }}
+        </el-text>
+        <el-text class="reference-note" size="small" type="info">
+          {{ activeReference.unknowns }}
+        </el-text>
+      </template>
+      <el-text v-else size="small" type="info">
+        当前验证用例没有参考图。
       </el-text>
 
       <div

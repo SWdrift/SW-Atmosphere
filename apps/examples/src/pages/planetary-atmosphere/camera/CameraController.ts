@@ -17,7 +17,6 @@ import {
   type CameraPresetId,
   type CameraPresetPose,
 } from './cameraPresets.ts'
-import { CameraViewProbe } from './CameraViewProbe.ts'
 import {
   freeViewBasis,
   freeViewFromBasis,
@@ -72,7 +71,6 @@ export class CameraController {
   }
   private orbitRadiusKm = 0
   private targetOrbitRadiusKm = 0
-  private readonly viewProbe = new CameraViewProbe()
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -141,12 +139,6 @@ export class CameraController {
 
     this.mode = mode
     this.resetInput()
-    this.viewProbe.resetInput({
-      source: 'mode',
-      movementX: 0,
-      movementY: 0,
-      timestamp: performance.now(),
-    })
 
     if (mode === 'orbit') {
       this.freePositionBeforeOrbit = [...this.camera.position]
@@ -180,12 +172,6 @@ export class CameraController {
     const pose = cameraPresetPose(id, this.planetRadiusKm)
 
     this.setPose(pose)
-    this.viewProbe.resetInput({
-      source: 'preset',
-      movementX: 0,
-      movementY: 0,
-      timestamp: performance.now(),
-    })
     if (this.mode === 'orbit') {
       this.applyOrbitPose()
     }
@@ -239,12 +225,10 @@ export class CameraController {
     }
 
     if (deltaSeconds === 0) {
-      this.probeViewContinuity(deltaSeconds)
       return
     }
 
     if (!this.manualInputEnabled) {
-      this.probeViewContinuity(deltaSeconds)
       return
     }
 
@@ -254,7 +238,6 @@ export class CameraController {
       this.updateOrbit(deltaSeconds)
     }
 
-    this.probeViewContinuity(deltaSeconds)
   }
 
   private updateFreeFlight(
@@ -284,15 +267,6 @@ export class CameraController {
 
     if (rollDeltaRadians !== 0) {
       this.freeView = rollFreeBody(this.freeView, rollDeltaRadians)
-      this.viewProbe.recordInput(
-        {
-          source: 'free-keyboard',
-          movementX: rollDeltaRadians,
-          movementY: 0,
-          timestamp: performance.now(),
-        },
-        Math.abs(rollDeltaRadians),
-      )
     }
 
     if (hasLookRotation || rollDeltaRadians !== 0) {
@@ -378,18 +352,6 @@ export class CameraController {
     if (this.pressedKeys.has('KeyQ')) this.targetOrbitRadiusKm *= Math.exp(deltaSeconds)
     if (this.pressedKeys.has('KeyE')) this.targetOrbitRadiusKm *= Math.exp(-deltaSeconds)
 
-    if (yawRadians !== 0 || pitchRadians !== 0) {
-      this.viewProbe.recordInput(
-        {
-          source: 'orbit-keyboard',
-          movementX: yawRadians,
-          movementY: pitchRadians,
-          timestamp: performance.now(),
-        },
-        Math.abs(yawRadians) + Math.abs(pitchRadians),
-      )
-    }
-
     this.rotateOrbit(yawRadians, pitchRadians)
     this.clampOrbit()
 
@@ -454,17 +416,6 @@ export class CameraController {
       scale(radial, -1),
       WORLD_UP,
     )
-  }
-
-  private probeViewContinuity(deltaSeconds: number): void {
-    this.viewProbe.sample({
-      camera: this.camera,
-      freeView: this.freeView,
-      orbitAngles: this.orbitAngles,
-      mode: this.mode,
-      deltaSeconds,
-      pointerLocked: document.pointerLockElement === this.canvas,
-    })
   }
 
   private resetInput(): void {
@@ -547,16 +498,6 @@ export class CameraController {
       return
     }
 
-    this.viewProbe.recordInput(
-      {
-        source: 'free-mouse',
-        movementX: event.movementX,
-        movementY: event.movementY,
-        timestamp: event.timeStamp,
-      },
-      (Math.abs(event.movementX) + Math.abs(event.movementY)) *
-        sensitivity,
-    )
     this.pendingFreeLookRotationRadians = add(
       this.pendingFreeLookRotationRadians,
       [
@@ -577,16 +518,6 @@ export class CameraController {
     }
 
     const sensitivity = 0.0025
-    this.viewProbe.recordInput(
-      {
-        source: 'orbit-pointer',
-        movementX: event.movementX,
-        movementY: event.movementY,
-        timestamp: event.timeStamp,
-      },
-      (Math.abs(event.movementX) + Math.abs(event.movementY)) *
-        sensitivity,
-    )
     this.rotateOrbit(
       -event.movementX * sensitivity,
       event.movementY * sensitivity,

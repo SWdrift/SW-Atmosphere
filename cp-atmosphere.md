@@ -9,7 +9,7 @@
 ## Meta Reference
 
 - 先读根目录 `cp-meta.md`，再读本文件；可复用记忆读取同目录 `cpm-atmosphere.md`。
-- 晴空视觉真实性、晨昏线、光谱颜色和参考图验收继续读取 `cp-atmosphere-visual.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代、参考对比、可复现场景、动作路径和 URL 验证读取 `cp-atmosphere-workbench.md`。
+- 晴空视觉真实性、晨昏线、光谱颜色和参考图验收读取 `cp-atmosphere-visual.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代和 URL 验证读取 `cp-atmosphere-workbench.md`；摄像机坐标、控制、输入、预设和路径接入读取 `cp-atmosphere-camera.md`。
 - 同时遵循根目录 `AGENTS.md` 与 `apps/examples/src/pages/AGENTS.md`。
 - 阶段完成或动态任务区膨胀时使用 `compact-control-plane`。
 - 修改或审查代码时使用 `code-smell-guard`，只处理当前改动引入或加重的坏味道。
@@ -29,9 +29,7 @@
 - `AtmosphereParameters` 是物理参数唯一来源；TS、WGSL、Reference、Production 和 UI 只消费同一份定义及其序列化布局。
 - CPU/GPU 长度统一使用 km；UI 角度使用 degree，数学与 WGSL 使用 radian。
 - 世界空间固定为右手 Z-up 笛卡尔坐标：`+X` 右、`+Y` 前、`+Z` 上，行星中心为原点。
-- 相机局部基为 `+X` right、`+Y` forward、`+Z` up；`PlanetCamera` 单位四元数是最终渲染姿态的唯一真相。
-- Free 控制采用传统 Body/Look Rig：单位四元数 `qBody` 是人的身体局部坐标与局部天顶，Q/E 绕当前最终视线旋转整个 Body；`lookYaw/lookPitch` 是相对 Body 的观察角，鼠标只更新它们且 pitch 限制为 ±89°。最终姿态固定为 `qCamera = qBody × qYaw × qPitch`，不得把 roll 放在 Look 之后，也不得从最终姿态反解或修正控制状态。Orbit 方位/仰角/半径和太阳世界方向保留独立状态。
-- Free 的 WASD 速度状态保存为相机局部分量，每帧使用当前相机基转换为世界位移；姿态变化不得遗留旧世界方向的速度。
+- 摄像机最终姿态、控制状态和输入边界由 `cp-atmosphere-camera.md` 约束；本平面只消费其世界空间结果。
 - 真相无法构建时 fail fast，不用 `||`、`??` 或隐式默认值制造替代状态。
 
 ### 渲染边界
@@ -57,7 +55,6 @@
 - LUT 使用 dirty dependency；静止且依赖未变时不重建，resize 只重建尺寸相关资源。
 - shader compilation info、error scope、`uncapturederror` 与 `device.lost` 必须暴露可定位错误。
 - CPU 数学先有确定性测试；GPU 正确性依靠 LUT debug、固定场景、Reference 对照和管线校验。
-- 保留 Pointer Lock `64px` 异常输入过滤、`[CameraInputOutlier]` 与 `[CameraViewJumpProbe]`；没有测量证据时不用平滑或阻尼掩盖尖峰。
 - `pnpm --filter examples test` 运行回归测试；`pnpm --filter examples build` 执行 `vue-tsc -b && vite build`。当前没有 lint 脚本。
 - 不编造性能数据；CPU submit 时间不得称为 GPU 时间。没有目标设备证据时明确写未验证。
 - 不主动启动持久开发服务器；人工浏览器验证使用用户已启动的服务。

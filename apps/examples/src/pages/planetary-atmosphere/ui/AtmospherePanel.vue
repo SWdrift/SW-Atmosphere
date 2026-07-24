@@ -22,7 +22,10 @@ const activePanel = computed({
       throw new Error(`未知的大气实验面板：${id}`)
     }
 
-    void router.push(panel.path)
+    void router.push({
+      path: panel.path,
+      query: route.query,
+    })
   },
 })
 </script>

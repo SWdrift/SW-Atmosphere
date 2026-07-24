@@ -91,7 +91,11 @@ test('工作台状态形成单向生命周期', () => {
   store.beginValidationCaseActivation('space-limb')
   store.completeValidationCaseActivation('space-limb')
   assert.equal(store.workbench.phase, 'active')
-  assert.equal(store.workbench.referenceVisible, true)
+  assert.equal(store.workbench.referenceVisible, false)
+  assert.equal(store.workbench.referenceMix, 0.5)
+
+  store.setReferenceVisible(true)
+  store.setReferenceMix(0.35)
 
   store.beginWorkbenchPath('space-limb-rise')
   store.addWorkbenchCheckpoint('start')
@@ -102,8 +106,8 @@ test('工作台状态形成单向生命周期', () => {
   store.deactivateValidationCase()
   assert.equal(store.workbench.phase, 'idle')
   assert.equal(store.workbench.activeCaseId, null)
-  assert.equal(store.workbench.referenceVisible, false)
-  assert.throws(() => store.setReferenceVisible(true))
+  assert.equal(store.workbench.referenceVisible, true)
+  assert.equal(store.workbench.referenceMix, 0.35)
 })
 
 test('动作路径按声明顺序执行并恢复人工输入', async () => {
@@ -182,13 +186,22 @@ test('动作路径取消后恢复输入且不执行后续检查点', async () =>
   )
 })
 
-test('验证用例 ID 唯一且引用元数据完整', () => {
+test('验证用例 ID 唯一且仅部分用例包含完整参考元数据', () => {
   const ids = new Set(VALIDATION_CASES.map((item) => item.id))
+  const withReference = VALIDATION_CASES.filter(
+    (item) => item.reference !== null,
+  )
+  const withoutReference = VALIDATION_CASES.filter(
+    (item) => item.reference === null,
+  )
 
   assert.equal(ids.size, VALIDATION_CASES.length)
+  assert.ok(withReference.length > 0)
+  assert.ok(withoutReference.length > 0)
   assert.ok(
-    VALIDATION_CASES.every(
+    withReference.every(
       (item) =>
+        item.reference !== null &&
         item.reference.src.length > 0 &&
         item.reference.comparable.length > 0 &&
         item.reference.unknowns.length > 0,
