@@ -1,6 +1,6 @@
-import type { PlanetCamera } from '../camera/PlanetCamera.ts'
 import type { Vec3 } from '../math/vector3.ts'
 import { resolveAtmosphereLutDirtyPasses } from './atmospherePhysics.ts'
+import type { AtmosphereCameraFrame } from './AtmosphereFrame.ts'
 
 const TRANSMITTANCE_SIZE = [256, 64]
 const MULTIPLE_SCATTERING_SIZE = [32, 32]
@@ -8,8 +8,9 @@ const SKY_VIEW_SIZE = [192, 108]
 const AERIAL_PERSPECTIVE_SIZE = 32
 
 export interface AtmosphereLutFrame {
-  camera: PlanetCamera
+  camera: AtmosphereCameraFrame
   sunDirection: Vec3
+  solarIrradianceScale: number
   multipleScattering: boolean
   rayleighEnabled: boolean
   mieEnabled: boolean
@@ -301,6 +302,7 @@ export class AtmosphereLutPipeline {
       radius,
       sunZenithCosine,
       frame.multipleScattering,
+      frame.solarIrradianceScale,
       quality.skyViewSteps,
     ].join(':')
     const aerialPerspectiveDependencyKey = [
@@ -312,6 +314,7 @@ export class AtmosphereLutPipeline {
       canvasWidth,
       canvasHeight,
       ...frame.sunDirection,
+      frame.solarIrradianceScale,
       frame.multipleScattering,
       quality.aerialPerspectiveSteps,
     ].join(':')

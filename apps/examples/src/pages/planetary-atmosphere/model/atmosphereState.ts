@@ -2,18 +2,19 @@ import type {
   AtmosphereDebugView,
   AtmosphereQuality,
 } from '../atmosphere/AtmosphereRenderer.ts'
-import { EARTH_ATMOSPHERE } from '../atmosphere/AtmosphereParameters.ts'
+import {
+  cloneCelestialScenario,
+  createDefaultCelestialScenario,
+  type CameraReferenceFrame,
+  type CelestialBodyId,
+  type CelestialScenario,
+} from '../celestial/CelestialSystem.ts'
 import {
   type CameraMode,
 } from '../camera/CameraController.ts'
 import {
-  cameraPresetPose,
   INITIAL_CAMERA_ALTITUDE_KM,
 } from '../camera/cameraPresets.ts'
-import {
-  sunAnglesFromDirection,
-  sunDirectionFromLocalAngles,
-} from '../math/coordinates.ts'
 import type { Vec3 } from '../math/vector3.ts'
 
 export type DebugGridPlane = 'xy' | 'xz' | 'yz'
@@ -23,15 +24,15 @@ export interface AtmosphereControls {
     mode: CameraMode
     verticalFovDegrees: number
     speedExponent: number
+    referenceBodyId: CelestialBodyId
+    referenceFrame: CameraReferenceFrame
   }
-  sun: {
-    azimuthDegrees: number
-    elevationDegrees: number
-  }
-  moon: {
-    enabled: boolean
-    azimuthDegrees: number
-    elevationDegrees: number
+  celestial: {
+    scenario: CelestialScenario
+    simulationTimeSeconds: number
+    paused: boolean
+    timeScale: number
+    selectedBodyId: CelestialBodyId
   }
   rendering: {
     exposure: number
@@ -56,6 +57,12 @@ export interface AtmosphereControls {
 export interface AtmosphereTelemetry {
   altitudeKm: number
   localSunElevationDegrees: number
+  simulationTimeSeconds: number
+  referenceBodyId: CelestialBodyId
+  sunDistanceKm: number
+  moonDistanceKm: number
+  sunMoonSeparationDegrees: number
+  solarVisibleFraction: number
   actualSpeedKmPerSecond: number
   targetSpeedKmPerSecond: number
   position: Vec3
@@ -78,42 +85,21 @@ export type AtmosphereRuntimePhase =
   | 'failed'
   | 'stopped'
 
-const INITIAL_CAMERA_POSE = cameraPresetPose(
-  'surface',
-  EARTH_ATMOSPHERE.bottomRadiusKm,
-)
-const INITIAL_SUN_ANGLES = sunAnglesFromDirection(
-  sunDirectionFromLocalAngles(
-    INITIAL_CAMERA_POSE.position,
-    [1, 0, 0],
-    0,
-    20,
-  ),
-)
-const INITIAL_MOON_ANGLES = sunAnglesFromDirection(
-  sunDirectionFromLocalAngles(
-    INITIAL_CAMERA_POSE.position,
-    [1, 0, 0],
-    -30,
-    0,
-  ),
-)
-
 export function createEarthControls(): AtmosphereControls {
   return {
     camera: {
       mode: 'free',
       verticalFovDegrees: 60,
       speedExponent: 0,
+      referenceBodyId: 'earth',
+      referenceFrame: 'inertial',
     },
-    sun: {
-      azimuthDegrees: INITIAL_SUN_ANGLES.azimuthDegrees,
-      elevationDegrees: INITIAL_SUN_ANGLES.elevationDegrees,
-    },
-    moon: {
-      enabled: true,
-      azimuthDegrees: INITIAL_MOON_ANGLES.azimuthDegrees,
-      elevationDegrees: INITIAL_MOON_ANGLES.elevationDegrees,
+    celestial: {
+      scenario: createDefaultCelestialScenario(),
+      simulationTimeSeconds: 0,
+      paused: true,
+      timeScale: 3600,
+      selectedBodyId: 'earth',
     },
     rendering: {
       exposure: 10,
@@ -141,8 +127,10 @@ export function cloneAtmosphereControls(
 ): AtmosphereControls {
   return {
     camera: { ...controls.camera },
-    sun: { ...controls.sun },
-    moon: { ...controls.moon },
+    celestial: {
+      ...controls.celestial,
+      scenario: cloneCelestialScenario(controls.celestial.scenario),
+    },
     rendering: { ...controls.rendering },
     debug: { ...controls.debug },
   }
@@ -152,6 +140,12 @@ export function createInitialTelemetry(): AtmosphereTelemetry {
   return {
     altitudeKm: INITIAL_CAMERA_ALTITUDE_KM,
     localSunElevationDegrees: 0,
+    simulationTimeSeconds: 0,
+    referenceBodyId: 'earth',
+    sunDistanceKm: 0,
+    moonDistanceKm: 0,
+    sunMoonSeparationDegrees: 0,
+    solarVisibleFraction: 1,
     actualSpeedKmPerSecond: 0,
     targetSpeedKmPerSecond: 0,
     position: [0, 0, 0],

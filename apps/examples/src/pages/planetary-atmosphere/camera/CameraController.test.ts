@@ -34,6 +34,25 @@ test('跨尺度速度近地可精细移动且太空受上限约束', () => {
   )
 })
 
+test('参考天体半径变化时保持相机高度而不是落入实体内部', () => {
+  const camera = new PlanetCamera(
+    [0, 0, 11],
+    [1, 0, 0],
+    [0, 0, 1],
+    60,
+  )
+  const controller = new CameraController(
+    {} as HTMLCanvasElement,
+    camera,
+    10,
+    () => {},
+  )
+
+  controller.setReferenceBodyRadius(20)
+
+  close(camera.position[2], 21)
+})
+
 test('斜向切线预设在屏幕中稳定倾斜 45°', () => {
   const camera = new PlanetCamera(
     [0, 0, EARTH_ATMOSPHERE.bottomRadiusKm + 20],

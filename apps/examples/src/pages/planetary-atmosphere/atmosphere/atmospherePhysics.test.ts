@@ -2,6 +2,11 @@ import { assert, test } from 'vitest'
 import { close } from '../test/assertions.ts'
 import { EARTH_ATMOSPHERE } from './AtmosphereParameters.ts'
 import {
+  createDefaultCelestialScenario,
+  evaluateCelestialScenario,
+} from '../celestial/CelestialSystem.ts'
+import { eclipseDiagnosticsAtPoint } from '../celestial/CelestialRenderFrame.ts'
+import {
   aerialPerspectiveDistanceFromSlice,
   aerialPerspectiveSliceFromDistance,
   beerLambert,
@@ -21,6 +26,17 @@ import {
   transmittanceRadiusCosineFromUv,
   transmittanceUvFromRadiusCosine,
 } from './atmospherePhysics.ts'
+
+const DEFAULT_SUN_ANGULAR_RADIUS_RADIANS = (() => {
+  const snapshot = evaluateCelestialScenario(
+    createDefaultCelestialScenario(),
+    0,
+  )
+  return eclipseDiagnosticsAtPoint(
+    snapshot,
+    snapshot.earth.systemPositionKm,
+  ).sunAngularRadiusRadians
+})()
 
 test('指数剖面和臭氧三角剖面覆盖边界', () => {
   close(exponentialDensity(0, 8), 1)
@@ -69,7 +85,7 @@ test('Beer-Lambert 在路径增长时透射率单调下降', () => {
 })
 
 test('太阳圆盘使用精确球冠立体角', () => {
-  const radius = EARTH_ATMOSPHERE.sunAngularRadiusRadians
+  const radius = DEFAULT_SUN_ANGULAR_RADIUS_RADIANS
   const exact = solarDiskSolidAngle(radius)
   const smallAngle = Math.PI * radius * radius
   const relativeError = Math.abs(smallAngle - exact) / exact
@@ -81,7 +97,7 @@ test('太阳圆盘使用精确球冠立体角', () => {
 })
 
 test('太阳圆盘像素覆盖率在物理边缘连续且单调', () => {
-  const radius = EARTH_ATMOSPHERE.sunAngularRadiusRadians
+  const radius = DEFAULT_SUN_ANGULAR_RADIUS_RADIANS
   const pixelWidth = radius * 0.25
   const distances = [
     radius - pixelWidth,
@@ -107,7 +123,7 @@ test('太阳圆盘像素覆盖率在物理边缘连续且单调', () => {
 })
 
 test('太阳圆盘穿越几何地平线时可见率和地表辐照连续', () => {
-  const radius = EARTH_ATMOSPHERE.sunAngularRadiusRadians
+  const radius = DEFAULT_SUN_ANGULAR_RADIUS_RADIANS
   const distances = [-radius, -radius / 2, 0, radius / 2, radius]
   const visibleFractions = distances.map((distance) =>
     solarDiskVisibleFraction(distance, radius),

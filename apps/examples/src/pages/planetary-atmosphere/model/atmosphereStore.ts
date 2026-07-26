@@ -8,6 +8,7 @@ import {
   type AtmosphereRuntimePhase,
   type AtmosphereTelemetry,
 } from './atmosphereState.ts'
+import { createDefaultCelestialScenario } from '../celestial/CelestialSystem.ts'
 
 export type AtmosphereWorkbenchPhase =
   | 'idle'
@@ -68,12 +69,31 @@ export const useAtmosphereStore = defineStore('planetary-atmosphere', {
       )
     },
 
+    advanceSimulationTime(deltaSeconds: number): void {
+      if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0) {
+        throw new Error('天体模拟步长必须是有限非负数。')
+      }
+      if (this.controls.celestial.paused) {
+        return
+      }
+
+      this.controls.celestial.simulationTimeSeconds +=
+        deltaSeconds * this.controls.celestial.timeScale
+    },
+
     replaceControls(controls: AtmosphereControls): void {
       this.controls = cloneAtmosphereControls(controls)
     },
 
     restoreEarthControls(): void {
       this.controls = createEarthControls()
+    },
+
+    restoreDefaultCelestialScenario(): void {
+      this.controls.celestial.scenario =
+        createDefaultCelestialScenario()
+      this.controls.celestial.simulationTimeSeconds = 0
+      this.controls.celestial.paused = true
     },
 
     requestValidationCase(id: string): void {

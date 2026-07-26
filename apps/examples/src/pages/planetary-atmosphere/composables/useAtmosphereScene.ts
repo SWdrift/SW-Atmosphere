@@ -89,6 +89,15 @@ export function useAtmosphereScene(
   )
   watch(
     () => [
+      store.controls.camera.referenceBodyId,
+      store.controls.camera.referenceFrame,
+    ] as const,
+    ([bodyId, frame]) => {
+      scene?.setCameraReference(bodyId, frame)
+    },
+  )
+  watch(
+    () => [
       route.path,
       route.params.caseId,
       route.query.reference,
@@ -139,6 +148,7 @@ export function useAtmosphereScene(
       () => store.controls,
       {
         adjustSpeedExponent: store.adjustSpeedExponent,
+        advanceSimulationTime: store.advanceSimulationTime,
         updateTelemetry: store.updateTelemetry,
         setPointerLocked: store.setPointerLocked,
         reportRenderError: store.setRenderError,

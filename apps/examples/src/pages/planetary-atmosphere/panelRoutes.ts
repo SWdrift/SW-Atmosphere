@@ -1,8 +1,18 @@
 export const ATMOSPHERE_PANEL_ROUTES = [
   {
-    id: 'parameters',
-    label: '参数',
-    path: '/planetary-atmosphere/parameters',
+    id: 'camera',
+    label: '相机',
+    path: '/planetary-atmosphere/camera',
+  },
+  {
+    id: 'celestial',
+    label: '天体',
+    path: '/planetary-atmosphere/celestial',
+  },
+  {
+    id: 'rendering',
+    label: '输出',
+    path: '/planetary-atmosphere/rendering',
   },
   {
     id: 'presets',
@@ -10,9 +20,9 @@ export const ATMOSPHERE_PANEL_ROUTES = [
     path: '/planetary-atmosphere/presets',
   },
   {
-    id: 'diagnostics',
-    label: '诊断',
-    path: '/planetary-atmosphere/diagnostics',
+    id: 'debug',
+    label: '调试',
+    path: '/planetary-atmosphere/debug',
   },
 ] as const
 

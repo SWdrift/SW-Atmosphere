@@ -3,9 +3,11 @@ import { useAtmosphereScene } from './composables/useAtmosphereScene.ts'
 import { useAtmosphereStore } from './model/atmosphereStore.ts'
 import { VALIDATION_CASES } from './model/validationCases.ts'
 import AtmospherePanel from './ui/AtmospherePanel.vue'
-import DiagnosticsPanel from './ui/DiagnosticsPanel.vue'
+import CelestialPanel from './ui/CelestialPanel.vue'
+import DebugPanel from './ui/DebugPanel.vue'
 import ParametersPanel from './ui/ParametersPanel.vue'
 import PresetsPanel from './ui/PresetsPanel.vue'
+import RenderingPanel from './ui/RenderingPanel.vue'
 
 const renderingCanvas = ref<HTMLCanvasElement | null>(null)
 const overlayCanvas = ref<HTMLCanvasElement | null>(null)
@@ -92,7 +94,7 @@ const activeReference = computed(() =>
       </section>
 
       <AtmospherePanel>
-        <template #parameters>
+        <template #camera>
           <ParametersPanel
             @reset-body-to-world-basis="resetBodyToWorldBasis"
             @reset-equatorial-body="resetEquatorialBody"
@@ -100,6 +102,14 @@ const activeReference = computed(() =>
             @set-free-look-angles="setFreeLookAnglesDegrees"
             @set-free-position="setFreePosition"
           />
+        </template>
+
+        <template #celestial>
+          <CelestialPanel />
+        </template>
+
+        <template #rendering>
+          <RenderingPanel />
         </template>
 
         <template #presets>
@@ -113,8 +123,8 @@ const activeReference = computed(() =>
           />
         </template>
 
-        <template #diagnostics>
-          <DiagnosticsPanel />
+        <template #debug>
+          <DebugPanel />
         </template>
       </AtmospherePanel>
     </div>

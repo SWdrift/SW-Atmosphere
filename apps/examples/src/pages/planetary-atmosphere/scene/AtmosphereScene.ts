@@ -4,9 +4,22 @@ import {
   type AtmosphereRendererInfo,
 } from '../atmosphere/AtmosphereRenderer.ts'
 import {
-  EARTH_MOON,
-  observeMoon,
-} from '../celestial/MoonParameters.ts'
+  buildCelestialRenderFrame,
+  eclipseDiagnosticsAtPoint,
+} from '../celestial/CelestialRenderFrame.ts'
+import {
+  cameraFrameRelativeToBody,
+  cameraSystemFrame,
+  rebaseCameraPose,
+  type CameraReferenceBinding,
+} from '../celestial/CelestialReferenceFrames.ts'
+import {
+  bodyFromSnapshot,
+  evaluateCelestialScenario,
+  type CameraReferenceFrame,
+  type CelestialBodyId,
+} from '../celestial/CelestialSystem.ts'
+import { EARTH_MOON_MATERIAL } from '../celestial/CelestialMaterials.ts'
 import {
   CameraController,
   type CameraMode,
@@ -19,9 +32,13 @@ import {
 import { PlanetCamera } from '../camera/PlanetCamera.ts'
 import {
   altitudeFromPosition,
-  sunDirectionFromAngles,
 } from '../math/coordinates.ts'
-import { dot, type Vec3 } from '../math/vector3.ts'
+import {
+  dot,
+  normalize,
+  subtract,
+  type Vec3,
+} from '../math/vector3.ts'
 import type {
   AtmosphereControls,
   AtmosphereTelemetry,
@@ -30,6 +47,7 @@ import { DebugOverlay } from './DebugOverlay.ts'
 
 export interface AtmosphereSceneEvents {
   adjustSpeedExponent(delta: number): void
+  advanceSimulationTime(deltaSeconds: number): void
   updateTelemetry(telemetry: AtmosphereTelemetry): void
   setPointerLocked(pointerLocked: boolean): void
   reportRenderError(message: string): void
@@ -51,6 +69,7 @@ export class AtmosphereScene {
   private previousTime: number | null = null
   private telemetryUpdatedAt = 0
   private smoothedFrameMilliseconds = 0
+  private cameraBinding: CameraReferenceBinding
 
   private constructor(
     renderingCanvas: HTMLCanvasElement,
@@ -69,6 +88,11 @@ export class AtmosphereScene {
     this.getControls = getControls
     this.events = events
     this.rendererInfo = renderer.info
+    const controls = getControls()
+    this.cameraBinding = {
+      bodyId: controls.camera.referenceBodyId,
+      frame: controls.camera.referenceFrame,
+    }
   }
 
   static async create(
@@ -78,9 +102,22 @@ export class AtmosphereScene {
     events: AtmosphereSceneEvents,
   ): Promise<AtmosphereScene> {
     const controls = getControls()
+    const snapshot = evaluateCelestialScenario(
+      controls.celestial.scenario,
+      controls.celestial.simulationTimeSeconds,
+    )
+    if (snapshot.earth.radiusKm !== EARTH_ATMOSPHERE.bottomRadiusKm) {
+      throw new Error(
+        '当前阶段要求地球实体半径与大气底部半径完全一致。',
+      )
+    }
+    const referenceBody = bodyFromSnapshot(
+      snapshot,
+      controls.camera.referenceBodyId,
+    )
     const initialPose = cameraPresetPose(
       'surface',
-      EARTH_ATMOSPHERE.bottomRadiusKm,
+      referenceBody.radiusKm,
     )
     const camera = new PlanetCamera(
       initialPose.position,
@@ -91,7 +128,7 @@ export class AtmosphereScene {
     const controller = new CameraController(
       renderingCanvas,
       camera,
-      EARTH_ATMOSPHERE.bottomRadiusKm,
+      referenceBody.radiusKm,
       events.adjustSpeedExponent,
     )
     controller.resetEquatorialBody()
@@ -99,7 +136,7 @@ export class AtmosphereScene {
     const renderer = await AtmosphereRenderer.create(
       renderingCanvas,
       EARTH_ATMOSPHERE,
-      EARTH_MOON,
+      EARTH_MOON_MATERIAL,
       (message) => {
         if (scene === null) {
           throw new Error('场景完成创建前收到了渲染器运行时错误。')
@@ -169,6 +206,36 @@ export class AtmosphereScene {
     this.camera.setVerticalFov(degrees)
   }
 
+  setCameraReference(
+    bodyId: CelestialBodyId,
+    frame: CameraReferenceFrame,
+  ): void {
+    const nextBinding = { bodyId, frame }
+    if (
+      nextBinding.bodyId === this.cameraBinding.bodyId &&
+      nextBinding.frame === this.cameraBinding.frame
+    ) {
+      return
+    }
+
+    const controls = this.getControls()
+    const snapshot = evaluateCelestialScenario(
+      controls.celestial.scenario,
+      controls.celestial.simulationTimeSeconds,
+    )
+    const pose = rebaseCameraPose(
+      snapshot,
+      this.cameraBinding,
+      nextBinding,
+      this.controller.getPose(),
+    )
+    this.controller.setReferenceBodyRadius(
+      bodyFromSnapshot(snapshot, bodyId).radiusKm,
+    )
+    this.controller.setPose(pose)
+    this.cameraBinding = nextBinding
+  }
+
   applyCameraPreset(id: CameraPresetId): void {
     this.controller.applyPreset(id)
   }
@@ -217,38 +284,59 @@ export class AtmosphereScene {
       return
     }
 
-    const controls = this.getControls()
     const frameMilliseconds =
       this.previousTime === null
         ? 0
         : Math.max(0, now - this.previousTime)
     const deltaSeconds = Math.min(frameMilliseconds / 1000, 0.05)
     this.previousTime = now
+    this.events.advanceSimulationTime(deltaSeconds)
+    const controls = this.getControls()
+    const currentSnapshot = evaluateCelestialScenario(
+      controls.celestial.scenario,
+      controls.celestial.simulationTimeSeconds,
+    )
+    if (
+      currentSnapshot.earth.radiusKm !==
+      EARTH_ATMOSPHERE.bottomRadiusKm
+    ) {
+      throw new Error(
+        '当前阶段要求地球实体半径与大气底部半径完全一致。',
+      )
+    }
+    this.controller.setReferenceBodyRadius(
+      bodyFromSnapshot(currentSnapshot, this.cameraBinding.bodyId).radiusKm,
+    )
 
     this.controller.update(
       deltaSeconds,
       controls.camera.speedExponent,
     )
     const bodyLookFrame = this.controller.getBodyLookFrame()
-
-    const sunDirection = sunDirectionFromAngles(
-      controls.sun.azimuthDegrees,
-      controls.sun.elevationDegrees,
+    const celestialSnapshot = currentSnapshot
+    const systemCamera = cameraSystemFrame(
+      celestialSnapshot,
+      this.cameraBinding,
+      this.camera,
     )
-    const moon = observeMoon(
-      EARTH_MOON,
-      this.camera.position,
-      sunDirectionFromAngles(
-        controls.moon.azimuthDegrees,
-        controls.moon.elevationDegrees,
-      ),
+    const atmosphereCamera = cameraFrameRelativeToBody(
+      celestialSnapshot,
+      systemCamera,
+      'earth',
+    )
+    const celestial = buildCelestialRenderFrame(
+      celestialSnapshot,
+      systemCamera,
     )
     const frameResult = this.renderer.render({
-      camera: this.camera,
-      sunDirection,
-      moonDirection: moon.directionFromCamera,
-      moonAngularRadiusRadians: moon.angularRadiusRadians,
-      moonEnabled: controls.moon.enabled,
+      camera: {
+        position: atmosphereCamera.positionKm,
+        right: atmosphereCamera.right,
+        forward: atmosphereCamera.forward,
+        up: atmosphereCamera.up,
+        verticalFovDegrees: atmosphereCamera.verticalFovDegrees,
+      },
+      celestial,
       exposure: controls.rendering.exposure,
       geometryDebug: controls.debug.geometry,
       quality: controls.rendering.quality,
@@ -280,24 +368,44 @@ export class AtmosphereScene {
           frameMilliseconds * 0.1
 
     if (now - this.telemetryUpdatedAt >= 100) {
+      const eclipse = eclipseDiagnosticsAtPoint(
+        celestialSnapshot,
+        systemCamera.positionKm,
+      )
+      const earthRelativePosition = subtract(
+        systemCamera.positionKm,
+        celestialSnapshot.earth.systemPositionKm,
+      )
+      const sunDirection = normalize(subtract(
+        celestialSnapshot.sun.systemPositionKm,
+        systemCamera.positionKm,
+      ))
       const gpuPassEntries = frameResult.gpuPassMilliseconds
         ? Object.entries(frameResult.gpuPassMilliseconds)
         : []
 
       this.events.updateTelemetry({
         altitudeKm: altitudeFromPosition(
-          this.camera.position,
+          earthRelativePosition,
           EARTH_ATMOSPHERE.bottomRadiusKm,
         ),
         localSunElevationDegrees:
           Math.asin(
             Math.max(
               -1,
-              Math.min(1, dot(this.camera.localUp, sunDirection)),
+              Math.min(1, dot(normalize(earthRelativePosition), sunDirection)),
             ),
           ) *
           180 /
           Math.PI,
+        simulationTimeSeconds:
+          controls.celestial.simulationTimeSeconds,
+        referenceBodyId: this.cameraBinding.bodyId,
+        sunDistanceKm: eclipse.sunDistanceKm,
+        moonDistanceKm: eclipse.moonDistanceKm,
+        sunMoonSeparationDegrees:
+          eclipse.separationRadians * 180 / Math.PI,
+        solarVisibleFraction: eclipse.solarVisibleFraction,
         actualSpeedKmPerSecond:
           this.controller.actualSpeedKmPerSecond,
         targetSpeedKmPerSecond:

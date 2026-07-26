@@ -77,7 +77,7 @@ export class CameraController {
   targetSpeedKmPerSecond = 0
 
   private readonly canvas: HTMLCanvasElement
-  private readonly planetRadiusKm: number
+  private planetRadiusKm: number
   private readonly adjustSpeedExponent: (delta: number) => void
   private readonly pressedKeys = new Set<string>()
   private localVelocityKmPerSecond: Vec3 = [0, 0, 0]
@@ -221,6 +221,38 @@ export class CameraController {
       forward: [...this.camera.forward],
       up: [...this.camera.up],
     }
+  }
+
+  setReferenceBodyRadius(radiusKm: number): void {
+    if (!Number.isFinite(radiusKm) || radiusKm <= 0) {
+      throw new Error('摄像机参考天体半径必须是有限正数。')
+    }
+
+    if (radiusKm === this.planetRadiusKm) {
+      return
+    }
+
+    const previousRadiusKm = this.planetRadiusKm
+    const previousAltitudeKm =
+      length(this.camera.position) - previousRadiusKm
+    const nextPosition = scale(
+      normalize(this.camera.position),
+      radiusKm + Math.max(previousAltitudeKm, MINIMUM_CAMERA_ALTITUDE_KM),
+    )
+    this.planetRadiusKm = radiusKm
+    this.camera.setPose(nextPosition, this.camera.forward, this.camera.up)
+
+    if (this.freePositionBeforeOrbit !== null) {
+      const previousFreeAltitudeKm =
+        length(this.freePositionBeforeOrbit) - previousRadiusKm
+      this.freePositionBeforeOrbit = scale(
+        normalize(this.freePositionBeforeOrbit),
+        radiusKm +
+          Math.max(previousFreeAltitudeKm, MINIMUM_CAMERA_ALTITUDE_KM),
+      )
+    }
+
+    this.initializeOrbitFromCamera()
   }
 
   getBodyLookFrame(): BodyLookFrame | null {

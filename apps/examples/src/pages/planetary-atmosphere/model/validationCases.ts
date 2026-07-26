@@ -10,9 +10,18 @@ import {
   type CameraPresetId,
 } from '../camera/cameraPresets.ts'
 import {
-  sunAnglesFromDirection,
+  circularOrbitAtDirection,
+} from '../celestial/CelestialSystem.ts'
+import {
   sunDirectionFromLocalAngles,
 } from '../math/coordinates.ts'
+import { intersectRaySphere } from '../math/raySphere.ts'
+import {
+  add,
+  cross,
+  normalize,
+  scale,
+} from '../math/vector3.ts'
 import {
   cloneAtmosphereControls,
   createEarthControls,
@@ -43,6 +52,14 @@ interface ValidationControls {
   debugView: AtmosphereDebugView
   aerialPerspectiveSlice: number
   components: ValidationComponents
+  moonComposition:
+    | { kind: 'standard' }
+    | {
+        kind: 'camera-ray'
+        cameraPreset: CameraPresetId
+        rightOffset: number
+        upOffset: number
+      }
 }
 
 interface FinalControlsInput {
@@ -133,6 +150,16 @@ const SPACE_LIMB_REFERENCE: ValidationReference = {
   unknowns: '轨道高度、FOV、曝光和图像处理未知；不比较云与地表。',
 }
 
+const LUNAR_ATMOSPHERE_EDGE_REFERENCE: ValidationReference = {
+  src: new URL(
+    '../../../../../../document/public/atmoshpere/地球边缘-大气层顶部-ISS.webp',
+    import.meta.url,
+  ).href,
+  label: '大气边缘与月球参考',
+  comparable: '月球位于蓝色大气长路径上方时的轮廓、月相和背景明暗层次。',
+  unknowns: '拍摄高度、焦距、裁切、曝光和后期未知；当前系统不比较云层，也不按像素拟合月球尺寸。',
+}
+
 const PLANETARY_REFERENCE: ValidationReference = {
   src: new URL(
     '../../../../../../document/public/atmoshpere/地球边缘-远景-Artemis2.webp',
@@ -150,6 +177,24 @@ function finalControls(
     ...specification,
     debugView: 'final',
     aerialPerspectiveSlice: 1,
+    moonComposition: { kind: 'standard' },
+  }
+}
+
+function lunarFinalControls(
+  specification: FinalControlsInput,
+  cameraPreset: CameraPresetId,
+  rightOffset: number,
+  upOffset: number,
+): ValidationControls {
+  return {
+    ...finalControls(specification),
+    moonComposition: {
+      kind: 'camera-ray',
+      cameraPreset,
+      rightOffset,
+      upOffset,
+    },
   }
 }
 
@@ -159,8 +204,61 @@ function createControlsFromSpecification(
   const result = createEarthControls()
   result.camera.verticalFovDegrees =
     specification.verticalFovDegrees
-  result.sun.azimuthDegrees = specification.sunAzimuthDegrees
-  result.sun.elevationDegrees = specification.sunElevationDegrees
+  const sunDirection = [
+    Math.cos(specification.sunElevationDegrees * Math.PI / 180) *
+      Math.cos(specification.sunAzimuthDegrees * Math.PI / 180),
+    Math.cos(specification.sunElevationDegrees * Math.PI / 180) *
+      Math.sin(specification.sunAzimuthDegrees * Math.PI / 180),
+    Math.sin(specification.sunElevationDegrees * Math.PI / 180),
+  ] as const
+  const earthDirection = [
+    -sunDirection[0],
+    -sunDirection[1],
+    -sunDirection[2],
+  ] as const
+  result.celestial.scenario.earthOrbit = circularOrbitAtDirection(
+    result.celestial.scenario.earthOrbit,
+    earthDirection,
+  )
+  if (specification.moonComposition.kind === 'standard') {
+    result.celestial.scenario.moonOrbit.meanAnomalyAtEpochDegrees = 90
+  } else {
+    const placement = specification.moonComposition
+    const pose = cameraPresetPose(
+      placement.cameraPreset,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
+    const cameraRight = normalize(cross(pose.forward, pose.up))
+    const cameraRay = normalize(add(
+      pose.forward,
+      add(
+        scale(cameraRight, placement.rightOffset),
+        scale(pose.up, placement.upOffset),
+      ),
+    ))
+    const orbitIntersection = intersectRaySphere(
+      pose.position,
+      cameraRay,
+      [0, 0, 0],
+      result.celestial.scenario.moonOrbit.semiMajorAxisKm,
+    )
+    if (orbitIntersection === null || orbitIntersection.far <= 0) {
+      throw new Error('月球验证构图射线无法到达月球轨道。')
+    }
+    const distance =
+      orbitIntersection.near > 0
+        ? orbitIntersection.near
+        : orbitIntersection.far
+    const moonPosition = add(
+      pose.position,
+      scale(cameraRay, distance),
+    )
+    result.celestial.scenario.moonOrbit = circularOrbitAtDirection(
+      result.celestial.scenario.moonOrbit,
+      moonPosition,
+    )
+  }
+  result.celestial.simulationTimeSeconds = 0
   result.rendering.exposure = specification.exposure
   result.rendering.quality = specification.quality
   result.rendering.multipleScattering =
@@ -195,6 +293,21 @@ function localSunAngles(
   sunAzimuthDegrees: number
   sunElevationDegrees: number
 } {
+  return localSunAnglesAtAzimuth(
+    cameraPreset,
+    0,
+    elevationDegrees,
+  )
+}
+
+function localSunAnglesAtAzimuth(
+  cameraPreset: CameraPresetId,
+  azimuthDegrees: number,
+  elevationDegrees: number,
+): {
+  sunAzimuthDegrees: number
+  sunElevationDegrees: number
+} {
   const pose = cameraPresetPose(
     cameraPreset,
     EARTH_ATMOSPHERE.bottomRadiusKm,
@@ -202,14 +315,14 @@ function localSunAngles(
   const direction = sunDirectionFromLocalAngles(
     pose.position,
     [1, 0, 0],
-    0,
+    azimuthDegrees,
     elevationDegrees,
   )
-  const angles = sunAnglesFromDirection(direction)
-
   return {
-    sunAzimuthDegrees: angles.azimuthDegrees,
-    sunElevationDegrees: angles.elevationDegrees,
+    sunAzimuthDegrees:
+      Math.atan2(direction[1], direction[0]) * 180 / Math.PI,
+    sunElevationDegrees:
+      Math.asin(direction[2]) * 180 / Math.PI,
   }
 }
 
@@ -688,6 +801,79 @@ export const VALIDATION_CASE_CATEGORIES = [
               multipleScattering: true,
               components: ALL_COMPONENTS,
             }),
+            reference: null,
+            path: null,
+          },
+        ],
+      },
+      {
+        id: 'lunar-composition',
+        label: '月球与大气构图',
+        description: '以真实月球轨道位置检查暮光、最长大气路径和夜侧天空中的月相与透射。',
+        cases: [
+          {
+            id: 'lunar-ground-terminator',
+            label: '晨昏线 · 近地平月球',
+            objective: '检查晨昏散射背景中的月球视差、细月相和地平线遮挡连续性。',
+            baseline: 'earth-clear',
+            cameraPreset: 'surface',
+            controls: lunarFinalControls(
+              {
+                quality: 'high',
+                verticalFovDegrees: 20,
+                ...localSunAnglesAtAzimuth('surface', 90, 0),
+                exposure: 10,
+                multipleScattering: true,
+                components: ALL_COMPONENTS,
+              },
+              'surface',
+              0.08,
+              0.08,
+            ),
+            reference: null,
+            path: null,
+          },
+          {
+            id: 'lunar-space-limb',
+            label: '大气边缘 · 月球',
+            objective: '检查月球穿过近切线大气时的透射、入射散射和地表遮挡边界。',
+            baseline: 'earth-clear',
+            cameraPreset: 'space-limb',
+            controls: lunarFinalControls(
+              {
+                quality: 'high',
+                verticalFovDegrees: 20,
+                ...localSunAngles('space-limb', 20),
+                exposure: 10,
+                multipleScattering: true,
+                components: ALL_COMPONENTS,
+              },
+              'space-limb',
+              0,
+              0.005,
+            ),
+            reference: LUNAR_ATMOSPHERE_EDGE_REFERENCE,
+            path: null,
+          },
+          {
+            id: 'lunar-ground-night',
+            label: '夜侧大气 · 高月',
+            objective: '检查夜侧低亮度大气中的明亮月面、自然角尺寸和无专属曝光合成。',
+            baseline: 'earth-clear',
+            cameraPreset: 'surface',
+            controls: lunarFinalControls(
+              {
+                quality: 'high',
+                verticalFovDegrees: 100,
+                ...localSunAngles('surface', -90),
+                exposure: 18,
+                multipleScattering: true,
+                components: ALL_COMPONENTS,
+              },
+              'surface',
+              0,
+              1,
+            ),
             reference: null,
             path: null,
           },

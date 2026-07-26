@@ -29,6 +29,18 @@ function formatAngle(degrees: number | null): string {
   <section class="panel-section">
     <h2>坐标与帧</h2>
     <el-descriptions :column="1" border size="small">
+      <el-descriptions-item label="模拟时间">
+        {{ store.runtime.telemetry.simulationTimeSeconds.toFixed(1) }} s
+      </el-descriptions-item>
+      <el-descriptions-item label="相机绑定">
+        {{ store.runtime.telemetry.referenceBodyId }}
+      </el-descriptions-item>
+      <el-descriptions-item label="日距">
+        {{ formatDistance(store.runtime.telemetry.sunDistanceKm) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="月距">
+        {{ formatDistance(store.runtime.telemetry.moonDistanceKm) }}
+      </el-descriptions-item>
       <el-descriptions-item label="高度">
         {{ formatDistance(store.runtime.telemetry.altitudeKm) }}
       </el-descriptions-item>

@@ -12,7 +12,7 @@ test('GPU 序列化布局固定且只包含物理真相', () => {
   assert.equal(uniforms.length, ATMOSPHERE_UNIFORM_FLOAT_COUNT)
   assert.equal(uniforms[0], EARTH_ATMOSPHERE.bottomRadiusKm)
   assert.equal(uniforms[1], EARTH_ATMOSPHERE.topRadiusKm)
-  close(uniforms[2], EARTH_ATMOSPHERE.sunAngularRadiusRadians, 1e-8)
+  close(uniforms[2], 0, 1e-8)
   close(uniforms[4], EARTH_ATMOSPHERE.rayleighScatteringPerKm[0], 1e-8)
   assert.equal(uniforms[7], EARTH_ATMOSPHERE.rayleighScaleHeightKm)
   close(uniforms[11], EARTH_ATMOSPHERE.mieScaleHeightKm, 1e-7)

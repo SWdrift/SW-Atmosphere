@@ -16,7 +16,6 @@ export interface AtmosphereParameters {
   solarIrradianceWattsPerSquareMeterPerNm: Vec3
   skySpectralRadianceToLinearSrgb: Vec3
   sunSpectralRadianceToLinearSrgb: Vec3
-  sunAngularRadiusRadians: number
 }
 
 export const ATMOSPHERE_UNIFORM_FLOAT_COUNT = 36
@@ -52,7 +51,6 @@ export const EARTH_ATMOSPHERE: Readonly<AtmosphereParameters> = Object.freeze({
     1,
     0.950262087132401,
   ],
-  sunAngularRadiusRadians: 0.004675,
 } satisfies AtmosphereParameters)
 
 export function serializeAtmosphereParameters(
@@ -93,14 +91,6 @@ export function serializeAtmosphereParameters(
     parameters.miePhaseG >= 1
   ) {
     throw new Error('Mie 相函数 g 必须位于 -1 到 1 之间。')
-  }
-
-  if (
-    !Number.isFinite(parameters.sunAngularRadiusRadians) ||
-    parameters.sunAngularRadiusRadians <= 0 ||
-    parameters.sunAngularRadiusRadians >= Math.PI / 2
-  ) {
-    throw new Error('太阳角半径必须是小于 π/2 的有限正数。')
   }
 
   const nonnegativeSpectra = [
@@ -153,7 +143,7 @@ export function serializeAtmosphereParameters(
   return new Float32Array([
     parameters.bottomRadiusKm,
     parameters.topRadiusKm,
-    parameters.sunAngularRadiusRadians,
+    0,
     0,
     ...parameters.rayleighScatteringPerKm,
     parameters.rayleighScaleHeightKm,

@@ -10,7 +10,7 @@
 
 - 先读根目录 `cp-meta.md`，再读本文件；可复用记忆读取同目录 `cpm-atmosphere.md`。
 - 长期目标读取 `document/行星大气与动态天气长期目标.md`；大气光学概念、自然视象和读图方法读取 `document/行星大气光学与视象图谱.md`。本 CP 不重复维护这些上位内容。
-- 晴空视觉真实性、晨昏线、光谱颜色和参考图验收读取 `cp-atmosphere-visual.md`；月球几何、光照和背景合成读取 `cp-atmosphere-moon.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代和 URL 验证读取 `cp-atmosphere-workbench.md`；摄像机坐标、控制、输入、预设和路径接入读取 `cp-atmosphere-camera.md`。
+- 天体实体、轨道、自转、时间和参考空间读取 `cp-celestial-system.md`；晴空视觉真实性、晨昏线、光谱颜色和参考图验收读取 `cp-atmosphere-visual.md`；月球表面与背景合成的历史边界读取 `cp-atmosphere-moon.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代和 URL 验证读取 `cp-atmosphere-workbench.md`；摄像机控制、输入、预设和路径接入读取 `cp-atmosphere-camera.md`。
 - 同时遵循根目录 `AGENTS.md` 与 `apps/examples/src/pages/AGENTS.md`。
 - 阶段完成或动态任务区膨胀时使用 `compact-control-plane`。
 - 修改或审查代码时使用 `code-smell-guard`，只处理当前改动引入或加重的坏味道。
@@ -29,14 +29,14 @@
 
 - `AtmosphereParameters` 是物理参数唯一来源；TS、WGSL、Reference、Production 和 UI 只消费同一份定义及其序列化布局。
 - CPU/GPU 长度统一使用 km；UI 角度使用 degree，数学与 WGSL 使用 radian。
-- 世界空间固定为右手 Z-up 笛卡尔坐标：`+X` 右、`+Y` 前、`+Z` 上，行星中心为原点。
+- 系统空间固定为 CPU 双精度右手 Z-up 笛卡尔坐标；天体轨道真相和派生参考空间由 `cp-celestial-system.md` 约束，默认调试参考空间以地心为原点。
 - 摄像机最终姿态、控制状态和输入边界由 `cp-atmosphere-camera.md` 约束；本平面只消费其世界空间结果。
 - 真相无法构建时 fail fast，不用 `||`、`??` 或隐式默认值制造替代状态。
 
 ### 渲染边界
 
 - 行星和大气是同心球壳；地表、大气内部、轨道和深空共用一套相交与辐射模型。
-- 星球、太阳、大气、世界 XYZ 网格和天空经纬方向均以世界空间为权威定义；摄像机只派生世界到屏幕的观察变换。GPU camera-relative 坐标只允许平移数值原点，不得改变世界轴或成为第二份场景真相。
+- 星球、太阳、月球和大气均消费天体系统快照；参考网格与摄像机只派生观察变换。GPU camera-relative 坐标只允许在 CPU 端平移数值原点，不得成为第二份场景真相。
 - 每像素视线由全屏三角形与摄像机基重建；禁止用天空盒、渐变背景、二维圆或固定高度平面实现大气。
 - 天空经纬 debug 只是独立的无限远方向 overlay，不得进入大气模型或被描述为天空盒实现。
 - CPU 世界位置使用 JavaScript `number`；GPU 使用相机相对行星中心，避免星球尺度 f32 精度损失。

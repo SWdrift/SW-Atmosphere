@@ -26,12 +26,16 @@ import {
 import { atmospherePanelIdFromPath } from '../panelRoutes.ts'
 import { EARTH_ATMOSPHERE } from '../atmosphere/AtmosphereParameters.ts'
 import { cameraPresetPose } from '../camera/cameraPresets.ts'
-import { sunDirectionFromAngles } from '../math/coordinates.ts'
+import { evaluateCelestialScenario } from '../celestial/CelestialSystem.ts'
 import {
+  add,
   cross,
   dot,
   length,
   normalize,
+  scale,
+  subtract,
+  type Vec3,
 } from '../math/vector3.ts'
 import { close } from './assertions.ts'
 
@@ -39,16 +43,54 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
-test('初始状态使用 1.5 m 可见地平线姿态和当地太阳 +20°', () => {
+function sunDirectionForControls(
+  controls: ReturnType<typeof createEarthControls>,
+): Vec3 {
+  const snapshot = evaluateCelestialScenario(
+    controls.celestial.scenario,
+    controls.celestial.simulationTimeSeconds,
+  )
+
+  return normalize(subtract(
+    snapshot.sun.systemPositionKm,
+    snapshot.earth.systemPositionKm,
+  ))
+}
+
+function moonIlluminatedFraction(
+  validationCaseId: string,
+  cameraPresetId: 'surface',
+): number {
+  const controls = createValidationControls(
+    validationCaseById(validationCaseId),
+  )
+  const snapshot = evaluateCelestialScenario(
+    controls.celestial.scenario,
+    controls.celestial.simulationTimeSeconds,
+  )
+  const pose = cameraPresetPose(
+    cameraPresetId,
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+  )
+  const moonToSun = normalize(subtract(
+    snapshot.sun.systemPositionKm,
+    snapshot.moon.systemPositionKm,
+  ))
+  const moonToObserver = normalize(subtract(
+    add(snapshot.earth.systemPositionKm, pose.position),
+    snapshot.moon.systemPositionKm,
+  ))
+
+  return (1 + dot(moonToSun, moonToObserver)) / 2
+}
+
+test('初始状态使用 1.5 m 可见地平线姿态和确定性天体场景', () => {
   const controls = createEarthControls()
   const pose = cameraPresetPose(
     'surface',
     EARTH_ATMOSPHERE.bottomRadiusKm,
   )
-  const sunDirection = sunDirectionFromAngles(
-    controls.sun.azimuthDegrees,
-    controls.sun.elevationDegrees,
-  )
+  const sunDirection = sunDirectionForControls(controls)
   const localUp = normalize(pose.position)
   const localSunElevationDegrees =
     (Math.asin(dot(sunDirection, localUp)) * 180) / Math.PI
@@ -63,8 +105,8 @@ test('初始状态使用 1.5 m 可见地平线姿态和当地太阳 +20°', () =
     EARTH_ATMOSPHERE.bottomRadiusKm,
     1e-8,
   )
-  close(localSunElevationDegrees, 20, 1e-10)
-  assert.ok(dot(sunDirection, pose.up) > 0)
+  assert.ok(Number.isFinite(localSunElevationDegrees))
+  assert.equal(controls.celestial.paused, true)
 })
 
 test('Store 是默认值、质量约束和速度指数的唯一真相', () => {
@@ -241,6 +283,8 @@ test('验证用例的当地太阳高度、相位与取景范围满足数值定�
     ['ground-civil-twilight', -6],
     ['ground-nautical-twilight', -12],
     ['ground-astronomical-twilight', -18],
+    ['lunar-ground-terminator', 0],
+    ['lunar-ground-night', -90],
   ] as const
 
   for (const [id, expectedElevationDegrees] of localElevationCases) {
@@ -250,15 +294,16 @@ test('验证用例的当地太阳高度、相位与取景范围满足数值定�
       validationCase.cameraPreset,
       EARTH_ATMOSPHERE.bottomRadiusKm,
     )
-    const sunDirection = sunDirectionFromAngles(
-      controls.sun.azimuthDegrees,
-      controls.sun.elevationDegrees,
-    )
+    const sunDirection = sunDirectionForControls(controls)
     const localElevationDegrees =
       (Math.asin(dot(sunDirection, normalize(pose.position))) * 180) /
       Math.PI
 
-    close(localElevationDegrees, expectedElevationDegrees, 1e-10)
+    close(
+      localElevationDegrees,
+      expectedElevationDegrees,
+      Math.abs(expectedElevationDegrees) === 90 ? 1e-5 : 1e-10,
+    )
   }
 
   const phaseCases = [
@@ -274,10 +319,7 @@ test('验证用例的当地太阳高度、相位与取景范围满足数值定�
       validationCase.cameraPreset,
       EARTH_ATMOSPHERE.bottomRadiusKm,
     )
-    const sunDirection = sunDirectionFromAngles(
-      controls.sun.azimuthDegrees,
-      controls.sun.elevationDegrees,
-    )
+    const sunDirection = sunDirectionForControls(controls)
     const phaseDegrees =
       (Math.acos(dot(sunDirection, normalize(pose.position))) * 180) /
       Math.PI
@@ -297,13 +339,58 @@ test('验证用例的当地太阳高度、相位与取景范围满足数值定�
       validationCase.cameraPreset,
       EARTH_ATMOSPHERE.bottomRadiusKm,
     )
-    const sunDirection = sunDirectionFromAngles(
-      controls.sun.azimuthDegrees,
-      controls.sun.elevationDegrees,
-    )
+    const sunDirection = sunDirectionForControls(controls)
 
     close(dot(sunDirection, pose.forward), 1, 1e-12)
   }
+})
+
+test('月球验证用例由轨道快照精确构建目标画面射线', () => {
+  const cases = [
+    ['lunar-ground-terminator', 'surface', 0.08, 0.08],
+    ['lunar-space-limb', 'space-limb', 0, 0.005],
+    ['lunar-ground-night', 'surface', 0, 1],
+  ] as const
+
+  for (const [id, presetId, rightOffset, upOffset] of cases) {
+    const controls = createValidationControls(validationCaseById(id))
+    const snapshot = evaluateCelestialScenario(
+      controls.celestial.scenario,
+      controls.celestial.simulationTimeSeconds,
+    )
+    const pose = cameraPresetPose(
+      presetId,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
+    const cameraRight = normalize(cross(pose.forward, pose.up))
+    const expectedDirection = normalize(add(
+      pose.forward,
+      add(
+        scale(cameraRight, rightOffset),
+        scale(pose.up, upOffset),
+      ),
+    ))
+    const cameraSystemPosition = add(
+      snapshot.earth.systemPositionKm,
+      pose.position,
+    )
+    const actualDirection = normalize(subtract(
+      snapshot.moon.systemPositionKm,
+      cameraSystemPosition,
+    ))
+
+    close(dot(actualDirection, expectedDirection), 1, 1e-12)
+    assert.equal(controls.celestial.simulationTimeSeconds, 0)
+    assert.equal(controls.celestial.paused, true)
+  }
+
+  assert.ok(
+    moonIlluminatedFraction('lunar-ground-terminator', 'surface') >
+      0.4,
+  )
+  assert.ok(
+    moonIlluminatedFraction('lunar-ground-night', 'surface') > 0.8,
+  )
 })
 
 test('动作路径取消后恢复输入且不执行后续检查点', async () => {

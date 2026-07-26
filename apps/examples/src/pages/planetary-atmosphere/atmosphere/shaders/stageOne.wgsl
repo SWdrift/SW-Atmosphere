@@ -15,12 +15,12 @@ struct FrameUniforms {
   camera_right_tan_half_fov: vec4<f32>,
   camera_up_aspect: vec4<f32>,
   camera_forward_debug: vec4<f32>,
-  sun_direction: vec4<f32>,
+  sun_center_radius: vec4<f32>,
+  moon_center_radius: vec4<f32>,
   integration: vec4<f32>,
   quality_debug: vec4<f32>,
   components: vec4<f32>,
-  moon_direction_angular_radius: vec4<f32>,
-  moon_reflectance_enabled: vec4<f32>,
+  moon_reflectance_solar_scale: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -61,6 +61,136 @@ var aerial_transmittance_output: texture_storage_3d<rgba16float, write>;
 
 const PI: f32 = 3.141592653589793;
 const INV_FOUR_PI: f32 = 1.0 / (4.0 * PI);
+
+fn solar_irradiance() -> vec3<f32> {
+  return atmosphere.solar_irradiance_w_m2_nm.xyz
+    * frame.moon_reflectance_solar_scale.w;
+}
+
+fn sun_center_in_space(planet_center: vec3<f32>) -> vec3<f32> {
+  return frame.sun_center_radius.xyz
+    - frame.planet_center_exposure.xyz
+    + planet_center;
+}
+
+fn moon_center_in_space(planet_center: vec3<f32>) -> vec3<f32> {
+  return frame.moon_center_radius.xyz
+    - frame.planet_center_exposure.xyz
+    + planet_center;
+}
+
+fn sun_direction_at(
+  position: vec3<f32>,
+  planet_center: vec3<f32>,
+) -> vec3<f32> {
+  return normalize(sun_center_in_space(planet_center) - position);
+}
+
+fn earth_sun_direction() -> vec3<f32> {
+  return normalize(
+    frame.sun_center_radius.xyz - frame.planet_center_exposure.xyz,
+  );
+}
+
+fn sun_angular_radius_at(
+  position: vec3<f32>,
+  planet_center: vec3<f32>,
+) -> f32 {
+  return asin(clamp(
+    frame.sun_center_radius.w
+      / length(sun_center_in_space(planet_center) - position),
+    0.0,
+    1.0,
+  ));
+}
+
+fn circle_occluded_fraction(
+  source_radius: f32,
+  occultor_radius: f32,
+  separation: f32,
+) -> f32 {
+  if (separation >= source_radius + occultor_radius) {
+    return 0.0;
+  }
+  if (separation <= abs(source_radius - occultor_radius)) {
+    let overlap_radius = min(source_radius, occultor_radius);
+    return min(
+      1.0,
+      overlap_radius * overlap_radius
+        / (source_radius * source_radius),
+    );
+  }
+
+  let source_term = acos(clamp(
+    (
+      separation * separation
+        + source_radius * source_radius
+        - occultor_radius * occultor_radius
+    ) / (2.0 * separation * source_radius),
+    -1.0,
+    1.0,
+  ));
+  let occultor_term = acos(clamp(
+    (
+      separation * separation
+        + occultor_radius * occultor_radius
+        - source_radius * source_radius
+    ) / (2.0 * separation * occultor_radius),
+    -1.0,
+    1.0,
+  ));
+  let lens_triangle = 0.5 * sqrt(max(
+    0.0,
+    (-separation + source_radius + occultor_radius)
+      * (separation + source_radius - occultor_radius)
+      * (separation - source_radius + occultor_radius)
+      * (separation + source_radius + occultor_radius),
+  ));
+  let overlap_area =
+    source_radius * source_radius * source_term
+      + occultor_radius * occultor_radius * occultor_term
+      - lens_triangle;
+  return clamp(
+    overlap_area / (PI * source_radius * source_radius),
+    0.0,
+    1.0,
+  );
+}
+
+fn solar_eclipse_visible_fraction(
+  position: vec3<f32>,
+  planet_center: vec3<f32>,
+) -> f32 {
+  let to_sun = sun_center_in_space(planet_center) - position;
+  let to_moon = moon_center_in_space(planet_center) - position;
+  let sun_distance = length(to_sun);
+  let moon_distance = length(to_moon);
+
+  if (moon_distance >= sun_distance) {
+    return 1.0;
+  }
+
+  let sun_radius = asin(clamp(
+    frame.sun_center_radius.w / sun_distance,
+    0.0,
+    1.0,
+  ));
+  let moon_radius = asin(clamp(
+    frame.moon_center_radius.w / moon_distance,
+    0.0,
+    1.0,
+  ));
+  let separation = acos(clamp(
+    dot(to_sun / sun_distance, to_moon / moon_distance),
+    -1.0,
+    1.0,
+  ));
+  return 1.0 - circle_occluded_fraction(
+    sun_radius,
+    moon_radius,
+    separation,
+  );
+}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -310,12 +440,12 @@ fn solar_disk_signed_horizon_distance(
   return center_elevation - horizon_elevation;
 }
 
-fn solar_disk_visible_fraction(
+fn solar_disk_horizon_visible_fraction(
   position: vec3<f32>,
   sun_direction: vec3<f32>,
   planet_center: vec3<f32>,
 ) -> f32 {
-  let angular_radius = atmosphere.radii_sun.z;
+  let angular_radius = sun_angular_radius_at(position, planet_center);
   let distance = solar_disk_signed_horizon_distance(
     position,
     sun_direction,
@@ -341,28 +471,41 @@ fn solar_disk_visible_fraction(
   ) / PI;
 }
 
+fn solar_disk_visible_fraction(
+  position: vec3<f32>,
+  sun_direction: vec3<f32>,
+  planet_center: vec3<f32>,
+) -> f32 {
+  return solar_disk_horizon_visible_fraction(
+    position,
+    sun_direction,
+    planet_center,
+  ) * solar_eclipse_visible_fraction(position, planet_center);
+}
+
 fn solar_disk_irradiance_cosine(
   position: vec3<f32>,
   sun_direction: vec3<f32>,
   planet_center: vec3<f32>,
 ) -> f32 {
-  let angular_radius = atmosphere.radii_sun.z;
+  let angular_radius = sun_angular_radius_at(position, planet_center);
   let distance = solar_disk_signed_horizon_distance(
     position,
     sun_direction,
     planet_center,
   );
-  let visible_fraction = solar_disk_visible_fraction(
+  let horizon_visible_fraction = solar_disk_horizon_visible_fraction(
     position,
     sun_direction,
     planet_center,
   );
 
-  if (visible_fraction <= 0.0) {
+  if (horizon_visible_fraction <= 0.0) {
     return 0.0;
   }
-  if (visible_fraction >= 1.0) {
-    return max(sin(distance), 0.0);
+  if (horizon_visible_fraction >= 1.0) {
+    return max(sin(distance), 0.0)
+      * solar_eclipse_visible_fraction(position, planet_center);
   }
 
   let normalized_distance = clamp(
@@ -375,9 +518,9 @@ fn solar_disk_irradiance_cosine(
       * angular_radius
       * pow(max(1.0 - normalized_distance * normalized_distance, 0.0), 1.5);
   return max(
-    distance * visible_fraction + segment_first_moment,
+    distance * horizon_visible_fraction + segment_first_moment,
     0.0,
-  );
+  ) * solar_eclipse_visible_fraction(position, planet_center);
 }
 
 fn solar_disk_mean_visible_cosine(
@@ -750,6 +893,24 @@ fn sample_solar_transmittance(
     * visible_fraction;
 }
 
+// Multi-Scattering LUT 是单位点太阳的轴对称近似，不能读取逐帧月影。
+fn sample_static_solar_transmittance(
+  position: vec3<f32>,
+  sun_direction: vec3<f32>,
+) -> vec3<f32> {
+  if (
+    solar_disk_signed_horizon_distance(
+      position,
+      sun_direction,
+      vec3<f32>(0.0),
+    ) <= 0.0
+  ) {
+    return vec3<f32>(0.0);
+  }
+
+  return sample_transmittance_to_top(position, sun_direction);
+}
+
 fn sample_multiple_scattering(
   position: vec3<f32>,
   sun_direction: vec3<f32>,
@@ -892,7 +1053,7 @@ fn cs_multiple_scattering(@builtin(global_invocation_id) id: vec3<u32>) {
         let scattering_integral =
           ray_transmittance * scattering * segment_integral;
         let solar_transmittance =
-          sample_solar_transmittance(position, sun_direction);
+          sample_static_solar_transmittance(position, sun_direction);
 
         ray_radiance +=
           scattering_integral * solar_transmittance * INV_FOUR_PI;
@@ -904,13 +1065,10 @@ fn cs_multiple_scattering(@builtin(global_invocation_id) id: vec3<u32>) {
         let ground_position =
           sample_position + ray_direction * max(ground_hit.near, 0.0);
         let ground_normal = normalize(ground_position);
-        let ground_sun_cosine = solar_disk_mean_visible_cosine(
-          ground_position + ground_normal * boundary_offset,
-          sun_direction,
-          vec3<f32>(0.0),
-        );
+        let ground_sun_cosine =
+          max(dot(ground_normal, sun_direction), 0.0);
         let ground_solar_transmittance =
-          sample_solar_transmittance(
+          sample_static_solar_transmittance(
             ground_position + ground_normal * boundary_offset,
             sun_direction,
           );
@@ -1039,7 +1197,7 @@ fn cs_sky_view(@builtin(global_invocation_id) id: vec3<u32>) {
   );
   let local_up = normalize(camera_position);
   let sun_zenith_cosine =
-    clamp(dot(local_up, frame.sun_direction.xyz), -1.0, 1.0);
+    clamp(dot(local_up, earth_sun_direction()), -1.0, 1.0);
   let sun_direction = vec3<f32>(
     sqrt(max(1.0 - sun_zenith_cosine * sun_zenith_cosine, 0.0)),
     0.0,
@@ -1113,7 +1271,7 @@ fn cs_sky_view(@builtin(global_invocation_id) id: vec3<u32>) {
         * (medium.scattering_rayleigh + medium.scattering_mie)
         * frame.integration.w;
     let source =
-      atmosphere.solar_irradiance_w_m2_nm.xyz
+      solar_irradiance()
         * (direct_scattering + multiple_scattering);
 
     radiance += view_transmittance * source * segment_integral;
@@ -1178,7 +1336,7 @@ fn integrate_aerial_transfer(
   step_count: u32,
 ) -> AerialTransfer {
   let step_length = distance / f32(step_count);
-  let view_sun_cosine = dot(ray_direction, frame.sun_direction.xyz);
+  let view_sun_cosine = dot(ray_direction, earth_sun_direction());
   let phase_rayleigh = rayleigh_phase(view_sun_cosine);
   let phase_mie = cornette_shanks_phase(
     view_sun_cosine,
@@ -1195,8 +1353,9 @@ fn integrate_aerial_transfer(
     let safe_extinction = max(medium.extinction, vec3<f32>(1.0e-6));
     let segment_integral =
       (vec3<f32>(1.0) - step_transmittance) / safe_extinction;
+    let sun_direction = sun_direction_at(position, vec3<f32>(0.0));
     let solar_transmittance =
-      sample_solar_transmittance(position, frame.sun_direction.xyz);
+      sample_solar_transmittance(position, sun_direction);
     let direct_scattering =
       solar_transmittance
         * (
@@ -1204,11 +1363,11 @@ fn integrate_aerial_transfer(
             + medium.scattering_mie * phase_mie
         );
     let multiple_scattering =
-      sample_multiple_scattering(position, frame.sun_direction.xyz)
+      sample_multiple_scattering(position, sun_direction)
         * (medium.scattering_rayleigh + medium.scattering_mie)
         * frame.integration.w;
     let source =
-      atmosphere.solar_irradiance_w_m2_nm.xyz
+      solar_irradiance()
         * (direct_scattering + multiple_scattering);
 
     radiance += transmittance * source * segment_integral;
@@ -1226,18 +1385,19 @@ fn production_surface_radiance(
 ) -> vec3<f32> {
   let surface_normal = normalize(surface_position);
   let sample_position = surface_position + surface_normal * 0.001;
+  let sun_direction = sun_direction_at(sample_position, vec3<f32>(0.0));
   let sun_cosine = solar_disk_mean_visible_cosine(
     sample_position,
-    frame.sun_direction.xyz,
+    sun_direction,
     vec3<f32>(0.0),
   );
   return atmosphere.ground_albedo_ozone_half_width.xyz
     * sun_spectral_as_sky_spectral(
-      atmosphere.solar_irradiance_w_m2_nm.xyz,
+      solar_irradiance(),
     )
     * sample_solar_transmittance(
       sample_position,
-      frame.sun_direction.xyz,
+      sun_direction,
     )
     * sun_cosine
     / PI;
@@ -1326,42 +1486,53 @@ fn sun_spectral_as_sky_spectral(spectral_radiance: vec3<f32>) -> vec3<f32> {
     / atmosphere.sky_spectral_to_linear_srgb.xyz;
 }
 
-fn moon_background_radiance(
-  ray_direction: vec3<f32>,
-) -> vec3<f32> {
-  if (frame.moon_reflectance_enabled.w < 0.5) {
-    return vec3<f32>(0.0);
-  }
-
-  let moon_direction = frame.moon_direction_angular_radius.xyz;
-  let angular_radius = frame.moon_direction_angular_radius.w;
+fn moon_disk_coverage(ray_direction: vec3<f32>) -> f32 {
+  let moon_center = frame.moon_center_radius.xyz;
+  let moon_direction = normalize(moon_center);
+  let angular_radius = asin(clamp(
+    frame.moon_center_radius.w / length(moon_center),
+    0.0,
+    1.0,
+  ));
   let angular_distance = acos(clamp(
     dot(ray_direction, moon_direction),
     -1.0,
     1.0,
   ));
   let pixel_angular_width = max(fwidth(angular_distance), 1.0e-6);
-  let coverage = 1.0 - smoothstep(
+  return 1.0 - smoothstep(
     angular_radius - 0.5 * pixel_angular_width,
     angular_radius + 0.5 * pixel_angular_width,
     angular_distance,
   );
+}
 
-  let normalized_center_distance = 1.0 / sin(angular_radius);
-  let center = moon_direction * normalized_center_distance;
-  let center_projection = dot(ray_direction, center);
-  let discriminant =
-    center_projection * center_projection
-      - (dot(center, center) - 1.0);
-  let surface_distance =
-    center_projection - sqrt(max(discriminant, 0.0));
+fn moon_background_radiance(
+  ray_direction: vec3<f32>,
+  coverage: f32,
+) -> vec3<f32> {
+  let moon_center = frame.moon_center_radius.xyz;
+  let moon_radius = frame.moon_center_radius.w;
+  let moon_hit = intersect_sphere(
+    vec3<f32>(0.0),
+    ray_direction,
+    moon_center,
+    moon_radius,
+  );
+  if (moon_hit.hit == 0u || moon_hit.near < 0.0) {
+    return vec3<f32>(0.0);
+  }
+
+  let surface_position = ray_direction * moon_hit.near;
   let surface_normal =
-    normalize(ray_direction * surface_distance - center);
+    normalize(surface_position - moon_center);
+  let moon_sun_direction =
+    normalize(frame.sun_center_radius.xyz - surface_position);
   let sun_cosine =
-    max(dot(surface_normal, frame.sun_direction.xyz), 0.0);
+    max(dot(surface_normal, moon_sun_direction), 0.0);
   let reflected_radiance =
-    atmosphere.solar_irradiance_w_m2_nm.xyz
-      * frame.moon_reflectance_enabled.xyz
+    solar_irradiance()
+      * frame.moon_reflectance_solar_scale.xyz
       * sun_cosine
       / PI;
 
@@ -1442,8 +1613,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     ),
     hits_ground,
   );
+  let sun_direction = normalize(frame.sun_center_radius.xyz);
+  let sun_angular_radius = asin(clamp(
+    frame.sun_center_radius.w / length(frame.sun_center_radius.xyz),
+    0.0,
+    1.0,
+  ));
   let sun_angular_distance = acos(clamp(
-    dot(ray_direction, frame.sun_direction.xyz),
+    dot(ray_direction, sun_direction),
     -1.0,
     1.0,
   ));
@@ -1451,20 +1628,23 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     fwidth(sun_angular_distance),
     1.0e-6,
   );
-  let sun_coverage = 1.0 - smoothstep(
-    atmosphere.radii_sun.z - 0.5 * sun_pixel_angular_width,
-    atmosphere.radii_sun.z + 0.5 * sun_pixel_angular_width,
-    sun_angular_distance,
-  );
+  let moon_coverage = moon_disk_coverage(ray_direction);
+  let sun_coverage = (
+    1.0 - smoothstep(
+      sun_angular_radius - 0.5 * sun_pixel_angular_width,
+      sun_angular_radius + 0.5 * sun_pixel_angular_width,
+      sun_angular_distance,
+    )
+  ) * (1.0 - moon_coverage);
   let sun_solid_angle =
-    2.0 * PI * (1.0 - cos(atmosphere.radii_sun.z));
+    2.0 * PI * (1.0 - cos(sun_angular_radius));
   let solar_radiance =
     sun_spectral_as_sky_spectral(
-      atmosphere.solar_irradiance_w_m2_nm.xyz / sun_solid_angle,
+      solar_irradiance() / sun_solid_angle,
     );
   let background_radiance =
     solar_radiance * sun_coverage
-      + moon_background_radiance(ray_direction);
+      + moon_background_radiance(ray_direction, moon_coverage);
   let debug_view = u32(frame.quality_debug.z);
 
   if (debug_view == 1u) {
@@ -1480,7 +1660,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   if (debug_view == 2u) {
     let preview =
       sample_texture_2d_linear(multiple_scattering_lut, input.uv)
-        * atmosphere.solar_irradiance_w_m2_nm.xyz;
+        * solar_irradiance();
     return vec4<f32>(
       tone_map(
         sky_spectral_to_linear_srgb(preview),
@@ -1616,7 +1796,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         var sky_radiance = sample_sky_view(
           camera_planet_position,
           ray_direction,
-          frame.sun_direction.xyz,
+          earth_sun_direction(),
         );
 
         sky_radiance +=
@@ -1680,7 +1860,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
       let light_step_count = u32(frame.integration.y);
       let step_length =
         max(segment_end - segment_start, 0.0) / f32(view_step_count);
-      let view_sun_cosine = dot(ray_direction, frame.sun_direction.xyz);
+      let view_sun_cosine = dot(ray_direction, earth_sun_direction());
       let phase_rayleigh = rayleigh_phase(view_sun_cosine);
       let phase_mie = cornette_shanks_phase(
         view_sun_cosine,
@@ -1695,9 +1875,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let medium = sample_medium(sample_position, planet_center);
         let view_transmittance =
           exp(-(view_optical_depth + medium.extinction * step_length * 0.5));
+        let sun_direction = sun_direction_at(sample_position, planet_center);
         let sun_transmittance = transmittance_to_sun(
           sample_position,
-          frame.sun_direction.xyz,
+          sun_direction,
           planet_center,
           light_step_count,
         );
@@ -1709,7 +1890,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
           view_transmittance
             * sun_transmittance
             * scattering
-            * atmosphere.solar_irradiance_w_m2_nm.xyz
+            * solar_irradiance()
             * step_length;
         view_optical_depth += medium.extinction * step_length;
       }
@@ -1721,14 +1902,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let surface_normal = normalize(surface_position - planet_center);
         let surface_sample_position =
           surface_position + surface_normal * 0.001;
+        let surface_sun_direction =
+          sun_direction_at(surface_sample_position, planet_center);
         let sun_cosine = solar_disk_mean_visible_cosine(
           surface_sample_position,
-          frame.sun_direction.xyz,
+          surface_sun_direction,
           planet_center,
         );
         let sun_transmittance = transmittance_to_sun(
           surface_sample_position,
-          frame.sun_direction.xyz,
+          surface_sun_direction,
           planet_center,
           light_step_count,
         );
@@ -1736,7 +1919,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
           segment_transmittance
             * atmosphere.ground_albedo_ozone_half_width.xyz
             * sun_spectral_as_sky_spectral(
-              atmosphere.solar_irradiance_w_m2_nm.xyz,
+              solar_irradiance(),
             )
             * sun_transmittance
             * sun_cosine
