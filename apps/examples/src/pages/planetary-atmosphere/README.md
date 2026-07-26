@@ -19,13 +19,17 @@ pnpm --filter examples test
 
 ## 操作
 
-- Free flight：点击 canvas 进入 Pointer Lock。相机使用 Body/Look Rig：鼠标修改相对 Body 局部天顶的 yaw/pitch，pitch 限制为 ±89°；`Q/E` 绕当前最终视线旋转整个 Body，局部 right/up、局部天顶和屏幕随之一起偏转，lookYaw/lookPitch 保持不变。因此任意 Q/E 后鼠标操作与默认姿态同构。`W/S` 沿最终 local forward、`A/D` 沿最终 local right。`Shift` 加速，`Ctrl` 减速，滚轮调整速度指数。
+- Free flight：点击 canvas 进入 Pointer Lock。相机使用 Body/Look Rig：鼠标修改相对 Body 局部天顶的 yaw/pitch，pitch 限制为 ±89°；`Q/E` 绕当前最终视线旋转整个 Body，局部 right/up、局部天顶和屏幕随之一起偏转，lookYaw/lookPitch 保持不变。因此任意 Q/E 后鼠标操作与默认姿态同构。`W/S` 沿最终 view forward、`A/D` 沿最终 view right；`Space/C` 严格沿 Body local up 上升/下降，不随 Look yaw/pitch 偏转。`Shift` 加速，`Ctrl` 减速，滚轮调整速度指数。
 - Orbit：拖动或使用 `WASD` 调整绕世界 `+Z` 的方位角与轨道仰角，仰角在极点前限制为 ±89°，避免视线与世界 up 共线；摄像机始终看向世界原点且不产生 roll。滚轮或 `Q/E` 改变轨道半径。
-- 预设不会切换控制模式；高空、低轨和深空预设朝向行星中心。
-- “验证用例”使用 `/planetary-atmosphere/presets/:caseId` 深链接。点击按钮、直接访问、刷新和浏览器前进后退都由同一路由入口激活完整场景；离开“预设”标签页后取消激活，但不擅自恢复页面参数。
+- Free 模式提供两个快捷视角：“赤道默认”把相机移回 `-Y` 赤道地表，使 Body 水平面严格重合世界 XZ，并由 Look 单独承担真实可见地平线俯角；“世界基准”保持当前位置，只把 Body/Look 重置为 `right=+X、forward=+Y、up=+Z`。两个操作在 Orbit 中禁用。
+- Free 模式的摄像机面板可编辑世界位置与相对 Body 的“偏航角/俯仰角”。编辑使用独立草稿和显式应用命令，不把低频 telemetry 双向绑定成控制真相；位置必须位于最低高度球面之外，偏航角限制为 ±180°、俯仰角限制为 ±89°。最终 View forward、Body right/forward/up 和 Look 角继续由场景 telemetry 发布到诊断面板；Orbit 不存在 Body/Look 时对应字段显示 `—`，且禁用这些 Free 编辑命令。
+- 预设不会切换控制模式。地表预设高度为 `0.0015 km`（1.5 m）；地表、20 km 和 limb 预设按球面半径精确指向可见地平线，低轨和深空预设朝向行星中心。
+- “验证用例”按“观察尺度 / 专项诊断 → 分组 → 用例”展示，并使用 `/planetary-atmosphere/presets/:caseId` 深链接。点击按钮、直接访问、刷新和浏览器前进后退都由同一路由入口激活完整场景；离开“预设”标签页后取消激活，但不擅自恢复页面参数。
+- 自动化可直接访问稳定用例 URL，例如 `/planetary-atmosphere/presets/ground-civil-twilight`、`/planetary-atmosphere/presets/space-limb` 或 `/planetary-atmosphere/presets/ground-terminator-reference`，再通过 `window.atmosphereWorkbench.getSnapshot()` 获取完整上下文。
 - 参考图是可选用例数据，默认不显示，混合比例默认 `0.5`；两项设置不随用例切换而变化，并通过 `reference=0|1`、`mix=0..1` 查询参数复现。图片保持原始宽高比，只比较用例注明的自然层次，不用于逐像素拟合。
-- `地表晨昏线 60°` 提供 Production、Reference、Aerial L 串行对照路径；`太空大气边缘` 提供从 400 km 到 800 km 的确定性 limb 移动路径。路径执行期间禁用冲突的人工相机输入。
-- `全局 XYZ 网格` 固定在世界原点，可切换 XY、XZ、YZ 平面；X 永远为红色、Y 为绿色、Z 为蓝色，不跟随摄像机或地表法线移动。网格由独立透明 2D canvas 投影，不参与 WebGPU shader、深度和 tone mapping；右上角朝向标始终可见。
+- `地表晨昏线 60°` 提供 Production、Reference、Aerial L 串行对照路径；`太空大气边缘` 提供从 400 km 到 800 km 的确定性 limb 移动路径，每帧按当前高度重新构建切线姿态。路径执行期间禁用冲突的人工相机输入。
+- `全局 XYZ 网格` 固定在世界原点，可切换 XY、XZ、YZ 平面；X 永远为红色、Y 为绿色、Z 为蓝色，不跟随摄像机或地表法线移动。右上角的 `WORLD` 指示器显示世界轴在最终视角中的投影，保留朝视线方向的缩短量；相邻 Body/Look 姿态仪以 Body 水平面为基准显示 Look pitch，并标出相对 Body 的 yaw/pitch。姿态仪刻度使用 `tan(目标仰角 - Look pitch)` 的透视投影，`15°/30°` 等标签对应真实角差，不采用视觉等距假刻度。Orbit 没有 Body/Look 状态时姿态仪明确显示 `NO BODY`，不从世界坐标伪造身体水平。两个指示器均可独立开关。
+- 网格和两个指示器由画面内的独立透明 2D overlay canvas 绘制，不参与 WebGPU shader、深度和 tone mapping，但会进入视口截图。
 - `天空经纬网格` 是无限远世界方向层，不是大气渲染所使用的天空盒。纬度相对世界 XY 平面，经度绕世界 `+Z`，青色赤道为纬度 `0°`，黄色主经线为经度 `0°`（世界 `+Y`）。它不读取摄像机位置，可用于直接检查视角旋转的方向和连续性。
 
 失焦、退出 Pointer Lock、模式切换和组件卸载都会清空按键与速度状态。
@@ -42,6 +46,7 @@ Pointer Lock 单个 `mousemove` 的位移长度超过 `64px` 时视为浏览器�
 - 相机局部基固定为 `right=+X`、`forward=+Y`、`up=+Z`。Free 的控制真相是单位 `qBody` 与相对 Body 的 `lookYaw/lookPitch`，最终姿态固定为 `qCamera = qBody × qYaw × qPitch`。Q/E 以当前最终 forward 为世界旋转轴左乘 `qBody`，鼠标不修改 Body；最终四元数不反馈为控制角。
 - Orbit 的方位角、仰角和半径是轨道状态的唯一来源。它改变摄像机的世界位置，再以世界 `+Z` 为 up 参考朝向球心；返回 Free 时把当前完整世界基初始化为新的 Body，观察角归零。
 - 太阳不是场景物体，也没有局部 transform。UI 角度只生成一个世界空间单位方向，shader、昼夜面和太阳圆盘消费同一个方向。
+- 月球是地球大气外的独立天体。UI 控制地心方向，`celestial/MoonParameters.ts` 唯一定义平均半径、地心距离和当前 Lambert 漫反射近似；场景由相机世界位置派生视差和角半径，不设置显示尺寸。
 - CPU 和 GPU 长度统一使用 km，角度在 UI/CPU 输入使用 degree，三角函数和 WGSL 使用 radian。
 - CPU 世界位置使用 JavaScript `number`。GPU 把摄像机视为原点，上传 `planetCenter = -cameraPosition`，避免 shader 中再次叠加大坐标。
 - WGSL clip-space 的 x/y 范围是 `[-1, 1]`，深度范围是 `[0, 1]`。阶段一使用没有深度附件的全屏三角形。
@@ -78,11 +83,13 @@ Pinia AtmosphereStore（控制参数唯一真相、低频运行快照）
   → canvas
 
 PlanetCamera
-  → scene/DebugOverlay（全局网格投影、近面裁剪、XYZ 朝向标）
+  → scene/DebugOverlay（overlay 生命周期、网格投影与指示器排列）
+    → WorldAxesIndicator（世界 XYZ 投影）
+    → BodyAttitudeIndicator（Body 水平与 Look 关系）
   → transparent 2D canvas
 ```
 
-`AtmosphereParameters.ts` 是底部/顶部半径、Rayleigh/Mie、ozone、地表反照率和太阳参数的唯一来源，并负责 fail-fast 校验与 GPU 序列化。摄像机预设和初始高度由 `camera/cameraPresets.ts` 定义，最低高度由 `CameraController.ts` 定义，不混入大气物理参数。右侧功能菜单的控制参数由 `model/atmosphereStore.ts` 集中维护；场景内部的摄像机姿态、速度积分和 GPU 资源不进入 Vue 响应式状态。
+`AtmosphereParameters.ts` 是底部/顶部半径、Rayleigh/Mie、ozone、地表反照率和太阳参数的唯一来源，并负责 fail-fast 校验与 GPU 序列化。`celestial/MoonParameters.ts` 独立保存月球尺度和反射参数，并从世界空间月心与相机位置构建逐帧观察结果。摄像机预设、初始高度和切线姿态由 `camera/cameraPresets.ts` 定义；`CameraController.ts` 直接消费同一初始高度作为最低高度，不建立第二个数值。右侧功能菜单的控制参数由 `model/atmosphereStore.ts` 集中维护；场景内部的摄像机姿态、速度积分和 GPU 资源不进入 Vue 响应式状态。
 
 ## 球交
 
@@ -106,9 +113,9 @@ CPU 实现在 `math/raySphere.ts`，覆盖未命中、背离、内部、相切�
 speedKmPerSecond = clamp(max(0.005, altitudeKm * 0.05), 0.005, 2000)
 ```
 
-速度指数再乘 `2^exponent`。Free flight 在相机局部坐标中对目标速度做指数响应，每帧再使用当前 right/forward/up 基转换到世界速度，因此横滚时既有 WASD 速度会同步旋转。`PlanetCamera.move` 对位移线段和最低高度球做 sweep；接触地表后保留剩余切向位移，既不修改相机朝向，也不允许高速穿过行星。
+速度指数再乘 `2^exponent`。Free flight 在局部分量中对目标速度做指数响应：WASD 使用最终 view right/forward，Space/C 使用 `qBody` 派生的 Body up。Look yaw/pitch 因此不会改变升降基准，Q/E 修改 Body 后升降方向才随 Body 旋转。`PlanetCamera.move` 对位移线段和最低高度球做 sweep；接触地表后保留剩余切向位移，既不修改相机朝向，也不允许高速穿过行星。
 
-## 太阳与颜色
+## 太阳、月球与颜色
 
 太阳是从场景点指向太阳的单位方向，不是有限距离点光源。圆盘先计算视线与太阳方向的角距离，再使用该角距离的屏幕导数估计像素角宽度：
 
@@ -127,6 +134,8 @@ coverage = 1 - smoothstep(
 
 散射/消光系数使用 `km^-1`，与 km 路径积分相乘后光学深度无量纲，因此大气积分保持三条代表波长的光谱辐亮度。最终显示使用 Bruneton 680/550/440 nm 近似的 sky/sun 两组光谱到线性 sRGB 系数，并按绿色通道归一化以保持既有曝光尺度；直接太阳和地表直射先换算到 sky 编码后再与大气辐亮度合成。物理合成后只执行一次指数 tone mapping，并使用分段 sRGB 传递函数，不再以固定 `pow(1/2.2)` 代替显示编码。
 
+月球按赤道半径 `1737.5 km` 和平均地心距离 `384400 km` 构建。Final shader 解析重建球面法线，使用当前唯一太阳方向和无纹理 Lambert 漫反射近似形成月相；地球表面负责遮挡月球，未命中地表的月球背景统一按 `moonRadiance × transmittance + inScatteredRadiance` 穿过大气。本阶段不包含月面纹理、轨道历表、地照或食相。
+
 ## Uniform 布局
 
 物理参数 buffer 只在 renderer 创建时上传。TS 使用连续 36 个 `f32`，WGSL 使用 9 个 `vec4<f32>`，总计 144 bytes：
@@ -143,7 +152,7 @@ coverage = 1 - smoothstep(
 | 112 | `sky_spectral_to_linear_srgb` | 三波长天空辐亮度到线性 sRGB 的归一化系数、padding |
 | 128 | `sun_spectral_to_linear_srgb` | 三波长太阳辐亮度到线性 sRGB 的归一化系数、padding |
 
-逐帧 buffer 使用 8 个 `vec4<f32>`，总计 128 bytes：
+逐帧 buffer 使用 10 个 `vec4<f32>`，总计 160 bytes：
 
 | byte offset | WGSL 字段 | 内容 |
 | ---: | --- | --- |
@@ -155,6 +164,8 @@ coverage = 1 - smoothstep(
 | 80 | `integration` | Reference 视线/太阳步数、Production 标志、多重散射开关 |
 | 96 | `quality_debug` | Sky-View/Aerial 步数、debug view、3D slice |
 | 112 | `components` | Rayleigh、Mie、ozone 开关、高频逐像素路径标志 |
+| 128 | `moon_direction_angular_radius` | 相机指向月心的方向 xyz、观察角半径 |
+| 144 | `moon_reflectance_enabled` | 月面 RGB 漫反射率、显示开关 |
 
 ## 生命周期与错误
 
@@ -182,7 +193,7 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 - Multi-Scattering 可在 Production 独立关闭；Reference 始终禁用该开关，关闭后可在相同物理参数与相同单次散射阶数下比较 Reference/Production。
 - 调试视图覆盖 Transmittance、Multi-Scattering、Sky-View、Aerial `L`、Aerial `T` 和 Rayleigh/Mie/ozone density。
 - 设备支持 `timestamp-query` 时，每 500 ms 低频读取一次实际执行 pass 的 GPU 时间；不支持时只显示 CPU submit，二者不会混称。
-- 固定视觉基准覆盖地表局部太阳高度 `+5°/0°/−1°/−6°/−12°/−18°`、`5°/10°` 窄 FOV 太阳、20 km 高空晨昏、400 km 太空 limb 和深空行星盘晨昏。页面同时显示相机位置处的局部太阳高度，避免把世界 XY 高度角误当成当地太阳高度。
+- 固定视觉基准覆盖地表局部太阳高度 `+5°/0°/−1°/−6°/−12°/−18°`、`5°/10°/20°` 窄 FOV 太阳、20 km 高空晨昏、400 km 太空 limb 和深空行星盘晨昏。用例先从观察点当地坐标构建太阳方向，再转换为运行时世界角；页面同时显示相机位置处的局部太阳高度，避免把世界 XY 高度角误当成当地太阳高度。
 
 ## 公式与依据
 
@@ -202,6 +213,7 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 - 已有 Reference Rayleigh、Mie、ozone、Beer-Lambert 和单次散射直接积分。
 - 已建立 Transmittance、Multi-Scattering、Sky-View、双 3D Aerial Perspective 与地表最终合成。
 - 已接入 Bruneton 三波长显示近似、有限太阳圆盘遮挡和 High/窄 FOV 逐像素 Production 路径；完整多波长、多阶散射离线 Reference 仍未建立。
+- 已接入具有地月尺度、相机视差、解析月相和统一大气背景合成的无纹理月球；轨道历表、真实月面光度与食相仍未建立。
 - 大气外 Production 已使用逐像素单层视线积分，并复用 Transmittance 与 Multi-Scattering LUT；低分辨率 Outside View LUT 尚未实现。
 - 固定场景已有可重复入口，但 Reference/Production 像素误差尚未由 GPU readback 自动量化。
 - `rgba16float` storage 与 32³ texture limit 仍需在实际目标设备验证；读取采用 `textureLoad` 手工插值，不依赖 `float16-filterable`。
@@ -212,18 +224,19 @@ Aerial Perspective 使用两个独立的 32×32×32 `rgba16float` 纹理：一�
 ## 源码学习顺序
 
 1. `atmosphere/AtmosphereParameters.ts`
-2. `math/vector3.ts`
-3. `math/coordinates.ts`
-4. `math/raySphere.ts`
-5. `camera/PlanetCamera.ts`
-6. `camera/orbitCoordinates.ts`
-7. `camera/cameraPresets.ts`
-8. `camera/CameraController.ts`
-9. `model/atmosphereState.ts`
-10. `model/atmosphereStore.ts`
-11. `scene/AtmosphereScene.ts`
-12. `atmosphere/shaders/stageOne.wgsl`
-13. `atmosphere/AtmosphereLutPipeline.ts`
-14. `atmosphere/GpuTimestampRecorder.ts`
-15. `atmosphere/AtmosphereRenderer.ts`
-16. `index.vue`
+2. `celestial/MoonParameters.ts`
+3. `math/vector3.ts`
+4. `math/coordinates.ts`
+5. `math/raySphere.ts`
+6. `camera/PlanetCamera.ts`
+7. `camera/orbitCoordinates.ts`
+8. `camera/cameraPresets.ts`
+9. `camera/CameraController.ts`
+10. `model/atmosphereState.ts`
+11. `model/atmosphereStore.ts`
+12. `scene/AtmosphereScene.ts`
+13. `atmosphere/shaders/stageOne.wgsl`
+14. `atmosphere/AtmosphereLutPipeline.ts`
+15. `atmosphere/GpuTimestampRecorder.ts`
+16. `atmosphere/AtmosphereRenderer.ts`
+17. `index.vue`

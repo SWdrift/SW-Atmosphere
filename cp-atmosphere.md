@@ -10,7 +10,7 @@
 
 - 先读根目录 `cp-meta.md`，再读本文件；可复用记忆读取同目录 `cpm-atmosphere.md`。
 - 长期目标读取 `document/行星大气与动态天气长期目标.md`；大气光学概念、自然视象和读图方法读取 `document/行星大气光学与视象图谱.md`。本 CP 不重复维护这些上位内容。
-- 晴空视觉真实性、晨昏线、光谱颜色和参考图验收读取 `cp-atmosphere-visual.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代和 URL 验证读取 `cp-atmosphere-workbench.md`；摄像机坐标、控制、输入、预设和路径接入读取 `cp-atmosphere-camera.md`。
+- 晴空视觉真实性、晨昏线、光谱颜色和参考图验收读取 `cp-atmosphere-visual.md`；月球几何、光照和背景合成读取 `cp-atmosphere-moon.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代和 URL 验证读取 `cp-atmosphere-workbench.md`；摄像机坐标、控制、输入、预设和路径接入读取 `cp-atmosphere-camera.md`。
 - 同时遵循根目录 `AGENTS.md` 与 `apps/examples/src/pages/AGENTS.md`。
 - 阶段完成或动态任务区膨胀时使用 `compact-control-plane`。
 - 修改或审查代码时使用 `code-smell-guard`，只处理当前改动引入或加重的坏味道。
