@@ -4,6 +4,7 @@ import type {
   CameraPresetId,
   CameraPresetPose,
 } from '../camera/cameraPresets.ts'
+import type { Vec3 } from '../math/vector3.ts'
 import { useAtmosphereStore } from '../model/atmosphereStore.ts'
 import {
   cloneAtmosphereControls,
@@ -452,6 +453,28 @@ export function useAtmosphereScene(
     requireScene().applyCameraPreset(id)
   }
 
+  function resetEquatorialBody(): void {
+    requireScene().resetEquatorialBody()
+  }
+
+  function resetBodyToWorldBasis(): void {
+    requireScene().resetBodyToWorldBasis()
+  }
+
+  function setFreePosition(position: Vec3): void {
+    requireScene().setFreePosition(position)
+  }
+
+  function setFreeLookAnglesDegrees(
+    yawDegrees: number,
+    pitchDegrees: number,
+  ): void {
+    requireScene().setFreeLookAngles(
+      (yawDegrees * Math.PI) / 180,
+      (pitchDegrees * Math.PI) / 180,
+    )
+  }
+
   function restoreEarthDefaults(): void {
     store.restoreEarthControls()
     const activeScene = requireScene()
@@ -464,6 +487,10 @@ export function useAtmosphereScene(
 
   return {
     applyCameraPreset,
+    resetBodyToWorldBasis,
+    resetEquatorialBody,
+    setFreeLookAnglesDegrees,
+    setFreePosition,
     restoreEarthDefaults,
     workbench,
   }

@@ -1,4 +1,7 @@
-import type { CameraPresetPose } from '../camera/cameraPresets.ts'
+import {
+  tangentCameraPose,
+  type CameraPresetPose,
+} from '../camera/cameraPresets.ts'
 import { lerp, normalize } from '../math/vector3.ts'
 import {
   cloneAtmosphereControls,
@@ -18,6 +21,13 @@ export type WorkbenchPathStep =
       type: 'move-camera'
       from: CameraPresetPose
       to: CameraPresetPose
+      durationMilliseconds: number
+    }
+  | {
+      type: 'move-limb-camera'
+      fromAltitudeKm: number
+      toAltitudeKm: number
+      planetRadiusKm: number
       durationMilliseconds: number
     }
   | {
@@ -129,6 +139,22 @@ export async function executeWorkbenchPath(
         await clock.elapse(
           step.durationMilliseconds,
           () => {},
+          signal,
+        )
+        continue
+      }
+
+      if (step.type === 'move-limb-camera') {
+        await clock.elapse(
+          step.durationMilliseconds,
+          (progress) => {
+            const altitudeKm =
+              step.fromAltitudeKm * (1 - progress) +
+              step.toAltitudeKm * progress
+            port.setCameraPose(
+              tangentCameraPose(altitudeKm, step.planetRadiusKm),
+            )
+          },
           signal,
         )
         continue

@@ -1,11 +1,101 @@
 <script setup lang="ts">
+import { EARTH_ATMOSPHERE } from '../atmosphere/AtmosphereParameters.ts'
+import { assertFreeCameraPosition } from '../camera/CameraController.ts'
+import type { Vec3 } from '../math/vector3.ts'
 import { useAtmosphereStore } from '../model/atmosphereStore.ts'
 
 const emit = defineEmits<{
+  'reset-body-to-world-basis': []
+  'reset-equatorial-body': []
   'restore-defaults': []
+  'set-free-look-angles': [yawDegrees: number, pitchDegrees: number]
+  'set-free-position': [position: Vec3]
 }>()
 
 const store = useAtmosphereStore()
+const positionX = ref(0)
+const positionY = ref(0)
+const positionZ = ref(0)
+const lookYawDegrees = ref(0)
+const lookPitchDegrees = ref(0)
+const positionDirty = ref(false)
+const lookDirty = ref(false)
+const poseEditError = ref('')
+
+watch(
+  () => store.runtime.telemetry.position,
+  (position) => {
+    if (positionDirty.value) {
+      return
+    }
+
+    positionX.value = position[0]
+    positionY.value = position[1]
+    positionZ.value = position[2]
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [
+    store.runtime.telemetry.lookYawDegrees,
+    store.runtime.telemetry.lookPitchDegrees,
+  ] as const,
+  ([yawDegrees, pitchDegrees]) => {
+    if (
+      lookDirty.value ||
+      yawDegrees === null ||
+      pitchDegrees === null
+    ) {
+      return
+    }
+
+    lookYawDegrees.value = yawDegrees
+    lookPitchDegrees.value = pitchDegrees
+  },
+  { immediate: true },
+)
+
+function markPositionDirty(): void {
+  positionDirty.value = true
+  poseEditError.value = ''
+}
+
+function markLookDirty(): void {
+  lookDirty.value = true
+  poseEditError.value = ''
+}
+
+function applyPosition(): void {
+  const position: Vec3 = [
+    positionX.value,
+    positionY.value,
+    positionZ.value,
+  ]
+
+  try {
+    assertFreeCameraPosition(
+      position,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
+  } catch (error) {
+    poseEditError.value =
+      error instanceof Error ? error.message : String(error)
+    return
+  }
+
+  emit('set-free-position', position)
+  positionDirty.value = false
+}
+
+function applyLookAngles(): void {
+  emit(
+    'set-free-look-angles',
+    lookYawDegrees.value,
+    lookPitchDegrees.value,
+  )
+  lookDirty.value = false
+}
 </script>
 
 <template>
@@ -15,6 +105,110 @@ const store = useAtmosphereStore()
       <el-radio-button value="free">Free flight</el-radio-button>
       <el-radio-button value="orbit">Orbit</el-radio-button>
     </el-radio-group>
+
+    <div class="view-shortcuts">
+      <el-button
+        :disabled="
+          store.runtime.phase !== 'running' ||
+          store.controls.camera.mode !== 'free'
+        "
+        @click="emit('reset-equatorial-body')"
+      >
+        赤道默认
+      </el-button>
+      <el-button
+        :disabled="
+          store.runtime.phase !== 'running' ||
+          store.controls.camera.mode !== 'free'
+        "
+        @click="emit('reset-body-to-world-basis')"
+      >
+        世界基准
+      </el-button>
+    </div>
+
+    <div class="pose-editor">
+      <div class="pose-editor-title">位置（世界坐标 km）</div>
+      <label class="pose-input">
+        <span>X</span>
+        <el-input-number
+          v-model="positionX"
+          :controls="false"
+          :precision="3"
+          @update:model-value="markPositionDirty"
+        />
+      </label>
+      <label class="pose-input">
+        <span>Y</span>
+        <el-input-number
+          v-model="positionY"
+          :controls="false"
+          :precision="3"
+          @update:model-value="markPositionDirty"
+        />
+      </label>
+      <label class="pose-input">
+        <span>Z</span>
+        <el-input-number
+          v-model="positionZ"
+          :controls="false"
+          :precision="3"
+          @update:model-value="markPositionDirty"
+        />
+      </label>
+      <el-button
+        :disabled="
+          !positionDirty ||
+          store.runtime.phase !== 'running' ||
+          store.controls.camera.mode !== 'free'
+        "
+        @click="applyPosition"
+      >
+        应用位置
+      </el-button>
+
+      <div class="pose-editor-title">观察偏转（相对 Body）</div>
+      <label class="pose-input">
+        <span>偏航角</span>
+        <el-input-number
+          v-model="lookYawDegrees"
+          :controls="false"
+          :min="-180"
+          :max="180"
+          :precision="2"
+          @update:model-value="markLookDirty"
+        />
+      </label>
+      <label class="pose-input">
+        <span>俯仰角</span>
+        <el-input-number
+          v-model="lookPitchDegrees"
+          :controls="false"
+          :min="-89"
+          :max="89"
+          :precision="2"
+          @update:model-value="markLookDirty"
+        />
+      </label>
+      <el-button
+        :disabled="
+          !lookDirty ||
+          store.runtime.phase !== 'running' ||
+          store.controls.camera.mode !== 'free'
+        "
+        @click="applyLookAngles"
+      >
+        应用观察角
+      </el-button>
+      <el-text
+        v-if="poseEditError"
+        class="pose-edit-error"
+        type="danger"
+        size="small"
+      >
+        {{ poseEditError }}
+      </el-text>
+    </div>
 
     <div class="control-row">
       <span>垂直 FOV</span>
@@ -42,7 +236,7 @@ const store = useAtmosphereStore()
   </section>
 
   <section class="panel-section">
-    <h2>太阳与输出</h2>
+    <h2>天体与输出</h2>
     <el-radio-group
       :model-value="store.controls.rendering.quality"
       @update:model-value="store.setQuality"
@@ -108,7 +302,7 @@ const store = useAtmosphereStore()
       </output>
     </div>
     <div class="control-row">
-      <span>方位角</span>
+      <span>太阳方位</span>
       <el-slider
         v-model="store.controls.sun.azimuthDegrees"
         :min="-180"
@@ -118,7 +312,7 @@ const store = useAtmosphereStore()
       <output>{{ store.controls.sun.azimuthDegrees }}°</output>
     </div>
     <div class="control-row">
-      <span>高度角</span>
+      <span>太阳高度</span>
       <el-slider
         v-model="store.controls.sun.elevationDegrees"
         :min="-20"
@@ -128,6 +322,34 @@ const store = useAtmosphereStore()
       />
       <output>
         {{ store.controls.sun.elevationDegrees.toFixed(1) }}°
+      </output>
+    </div>
+    <div class="checkboxes">
+      <el-checkbox v-model="store.controls.moon.enabled">
+        显示月球
+      </el-checkbox>
+    </div>
+    <div class="control-row">
+      <span>月球方位</span>
+      <el-slider
+        v-model="store.controls.moon.azimuthDegrees"
+        :min="-180"
+        :max="180"
+        :show-tooltip="false"
+      />
+      <output>{{ store.controls.moon.azimuthDegrees.toFixed(0) }}°</output>
+    </div>
+    <div class="control-row">
+      <span>月球高度</span>
+      <el-slider
+        v-model="store.controls.moon.elevationDegrees"
+        :min="-90"
+        :max="90"
+        :step="0.5"
+        :show-tooltip="false"
+      />
+      <output>
+        {{ store.controls.moon.elevationDegrees.toFixed(1) }}°
       </output>
     </div>
     <div class="control-row">
@@ -153,6 +375,12 @@ const store = useAtmosphereStore()
       </el-checkbox>
       <el-checkbox v-model="store.controls.debug.skyGrid">
         天空经纬网格
+      </el-checkbox>
+      <el-checkbox v-model="store.controls.debug.axesIndicator">
+        XYZ 视角指示器
+      </el-checkbox>
+      <el-checkbox v-model="store.controls.debug.attitudeIndicator">
+        Body/Look 姿态仪
       </el-checkbox>
     </div>
     <div class="control-row">
@@ -202,6 +430,59 @@ const store = useAtmosphereStore()
   display: flex;
   flex-wrap: wrap;
   margin: 8px 0;
+}
+
+.view-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.view-shortcuts .el-button {
+  width: 100%;
+  margin: 0;
+}
+
+.pose-editor {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
+  background: var(--el-fill-color-extra-light);
+}
+
+.pose-editor-title {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pose-editor-title:not(:first-child) {
+  margin-top: 4px;
+}
+
+.pose-input {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.pose-input .el-input-number {
+  width: 100%;
+}
+
+.pose-editor .el-button {
+  width: 100%;
+  margin: 0;
+}
+
+.pose-edit-error {
+  line-height: 1.4;
 }
 
 .panel-section :deep(.el-radio-group) {

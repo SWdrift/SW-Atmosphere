@@ -1,4 +1,8 @@
 import type { PlanetCamera } from '../camera/PlanetCamera.ts'
+import {
+  validateMoonParameters,
+  type MoonParameters,
+} from '../celestial/MoonParameters.ts'
 import type { Vec3 } from '../math/vector3.ts'
 import {
   ATMOSPHERE_UNIFORM_BYTE_SIZE,
@@ -9,7 +13,7 @@ import { AtmosphereLutPipeline } from './AtmosphereLutPipeline.ts'
 import { GpuTimestampRecorder } from './GpuTimestampRecorder.ts'
 import stageOneShader from './shaders/stageOne.wgsl?raw'
 
-const FRAME_UNIFORM_FLOAT_COUNT = 32
+const FRAME_UNIFORM_FLOAT_COUNT = 40
 const FRAME_UNIFORM_BYTE_SIZE =
   FRAME_UNIFORM_FLOAT_COUNT * Float32Array.BYTES_PER_ELEMENT
 
@@ -76,6 +80,9 @@ const DEBUG_VIEW_INDEX = Object.freeze({
 export interface StageOneFrame {
   camera: PlanetCamera
   sunDirection: Vec3
+  moonDirection: Vec3
+  moonAngularRadiusRadians: number
+  moonEnabled: boolean
   exposure: number
   geometryDebug: boolean
   quality: AtmosphereQuality
@@ -106,6 +113,7 @@ export class AtmosphereRenderer {
   private readonly context: GPUCanvasContext
   private readonly device: GPUDevice
   private readonly topRadiusKm: number
+  private readonly moonParameters: MoonParameters
   private readonly pipeline: GPURenderPipeline
   private readonly lutPipeline: AtmosphereLutPipeline
   private readonly timestampRecorder: GpuTimestampRecorder | null
@@ -122,6 +130,7 @@ export class AtmosphereRenderer {
     context: GPUCanvasContext,
     device: GPUDevice,
     topRadiusKm: number,
+    moonParameters: MoonParameters,
     pipeline: GPURenderPipeline,
     lutPipeline: AtmosphereLutPipeline,
     timestampRecorder: GpuTimestampRecorder | null,
@@ -135,6 +144,7 @@ export class AtmosphereRenderer {
     this.context = context
     this.device = device
     this.topRadiusKm = topRadiusKm
+    this.moonParameters = moonParameters
     this.pipeline = pipeline
     this.lutPipeline = lutPipeline
     this.timestampRecorder = timestampRecorder
@@ -148,9 +158,11 @@ export class AtmosphereRenderer {
   static async create(
     canvas: HTMLCanvasElement,
     parameters: AtmosphereParameters,
+    moonParameters: MoonParameters,
     onFatalError: (message: string) => void,
   ): Promise<AtmosphereRenderer> {
     const atmosphereUniformData = serializeAtmosphereParameters(parameters)
+    validateMoonParameters(moonParameters)
     const gpu = navigator.gpu
 
     if (!gpu) {
@@ -345,6 +357,7 @@ export class AtmosphereRenderer {
       context,
       device,
       parameters.topRadiusKm,
+      moonParameters,
       pipeline,
       lutPipeline,
       timestampRecorder,
@@ -481,6 +494,14 @@ export class AtmosphereRenderer {
     ) {
       throw new Error('Aerial Perspective 调试切片必须位于 0 到 1。')
     }
+    if (
+      !frame.moonDirection.every(Number.isFinite) ||
+      !Number.isFinite(frame.moonAngularRadiusRadians) ||
+      frame.moonAngularRadiusRadians <= 0 ||
+      frame.moonAngularRadiusRadians >= Math.PI / 2
+    ) {
+      throw new Error('月球观察方向与角半径必须是有效的逐帧观察结果。')
+    }
 
     this.frameUniformData.set(
       [
@@ -506,6 +527,10 @@ export class AtmosphereRenderer {
         frame.mieEnabled ? 1 : 0,
         frame.ozoneEnabled ? 1 : 0,
         frame.quality === 'high' || camera.verticalFovDegrees <= 20 ? 1 : 0,
+        ...frame.moonDirection,
+        frame.moonAngularRadiusRadians,
+        ...this.moonParameters.diffuseReflectance,
+        frame.moonEnabled ? 1 : 0,
       ],
       0,
     )

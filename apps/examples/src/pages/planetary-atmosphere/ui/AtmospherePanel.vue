@@ -49,24 +49,31 @@ const activePanel = computed({
 .atmosphere-panel {
   box-sizing: border-box;
   height: 100%;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
 }
 
 .atmosphere-panel :deep(.el-tabs) {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 .atmosphere-panel :deep(.el-tabs__header) {
+  flex: none;
   height: 39px;
   margin: 0;
   padding: 0 12px;
 }
 
 .atmosphere-panel :deep(.el-tabs__content) {
+  flex: 1;
   box-sizing: border-box;
-  height: calc(100% - 39px);
+  min-height: 0;
   overflow-y: auto;
   padding: 12px;
 }

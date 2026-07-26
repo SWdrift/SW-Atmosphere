@@ -1,4 +1,5 @@
 import type { PlanetCamera } from '../camera/PlanetCamera.ts'
+import type { BodyLookAngles } from '../camera/freeViewCoordinates.ts'
 import {
   add,
   dot,
@@ -7,6 +8,8 @@ import {
   type Vec3,
 } from '../math/vector3.ts'
 import type { DebugGridPlane } from '../model/atmosphereState.ts'
+import { drawBodyAttitudeIndicator } from './BodyAttitudeIndicator.ts'
+import { drawWorldAxesIndicator } from './WorldAxesIndicator.ts'
 
 interface CameraPoint {
   x: number
@@ -18,6 +21,16 @@ export interface ProjectedPoint {
   x: number
   y: number
   depth: number
+}
+
+export interface DebugOverlayFrame {
+  camera: PlanetCamera
+  bodyLookAngles: BodyLookAngles | null
+  plane: DebugGridPlane
+  worldGridVisible: boolean
+  skyGridVisible: boolean
+  axesIndicatorVisible: boolean
+  attitudeIndicatorVisible: boolean
 }
 
 const GLOBAL_AXES = [
@@ -108,20 +121,21 @@ export class DebugOverlay {
     this.gridExtentKm = gridExtentKm
   }
 
-  render(
-    camera: PlanetCamera,
-    plane: DebugGridPlane,
-    worldGridVisible: boolean,
-    skyGridVisible: boolean,
-  ): void {
+  render(frame: DebugOverlayFrame): void {
+    const {
+      camera,
+      bodyLookAngles,
+      plane,
+      worldGridVisible,
+      skyGridVisible,
+      axesIndicatorVisible,
+      attitudeIndicatorVisible,
+    } = frame
+
     this.resize()
     this.context.clearRect(0, 0, this.cssWidth, this.cssHeight)
 
-    if (
-      (!worldGridVisible && !skyGridVisible) ||
-      this.cssWidth === 0 ||
-      this.cssHeight === 0
-    ) {
+    if (this.cssWidth === 0 || this.cssHeight === 0) {
       return
     }
 
@@ -133,7 +147,23 @@ export class DebugOverlay {
       this.drawGrid(camera, plane)
     }
 
-    this.drawOrientationGizmo(camera)
+    if (attitudeIndicatorVisible) {
+      drawBodyAttitudeIndicator(
+        this.context,
+        this.cssWidth - 124,
+        48,
+        bodyLookAngles,
+      )
+    }
+
+    if (axesIndicatorVisible) {
+      drawWorldAxesIndicator(
+        this.context,
+        this.cssWidth - 48,
+        48,
+        camera,
+      )
+    }
   }
 
   clear(): void {
@@ -360,55 +390,6 @@ export class DebugOverlay {
       (normalizedX * 0.5 + 0.5) * this.cssWidth,
       (0.5 - normalizedY * 0.5) * this.cssHeight,
     ]
-  }
-
-  private drawOrientationGizmo(camera: PlanetCamera): void {
-    const centerX = this.cssWidth - 48
-    const centerY = 48
-    const radius = 25
-
-    this.context.save()
-    this.context.fillStyle = 'rgba(0, 0, 0, 0.55)'
-    this.context.beginPath()
-    this.context.arc(centerX, centerY, 34, 0, Math.PI * 2)
-    this.context.fill()
-    this.context.font = '11px ui-monospace, monospace'
-    this.context.textAlign = 'center'
-    this.context.textBaseline = 'middle'
-
-    const projectedAxes = GLOBAL_AXES.map((axis) => ({
-      ...axis,
-      screenX: dot(axis.direction, camera.right),
-      screenY: -dot(axis.direction, camera.up),
-      depth: dot(axis.direction, camera.forward),
-    })).sort((a, b) => a.depth - b.depth)
-
-    for (const axis of projectedAxes) {
-      const screenLength = Math.hypot(axis.screenX, axis.screenY)
-
-      if (screenLength <= 1e-6) {
-        this.context.fillStyle = axis.color
-        this.context.beginPath()
-        this.context.arc(centerX, centerY, 3, 0, Math.PI * 2)
-        this.context.fill()
-        continue
-      }
-
-      const endX = centerX + (axis.screenX / screenLength) * radius
-      const endY = centerY + (axis.screenY / screenLength) * radius
-
-      this.context.strokeStyle = axis.color
-      this.context.fillStyle = axis.color
-      this.context.lineWidth = axis.depth >= 0 ? 2 : 1
-      this.context.globalAlpha = axis.depth >= 0 ? 1 : 0.45
-      this.context.beginPath()
-      this.context.moveTo(centerX, centerY)
-      this.context.lineTo(endX, endY)
-      this.context.stroke()
-      this.context.fillText(axis.label, endX, endY)
-    }
-
-    this.context.restore()
   }
 
   private planeAxes(plane: DebugGridPlane): {

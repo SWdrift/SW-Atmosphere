@@ -19,6 +19,8 @@ struct FrameUniforms {
   integration: vec4<f32>,
   quality_debug: vec4<f32>,
   components: vec4<f32>,
+  moon_direction_angular_radius: vec4<f32>,
+  moon_reflectance_enabled: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -98,7 +100,6 @@ struct ProductionRay {
   segment_end: f32,
   ground_distance: f32,
   ground_coverage: f32,
-  sun_coverage: f32,
   hits_ground: u32,
 };
 
@@ -1246,7 +1247,7 @@ fn integrate_production_final(
   ray_origin: vec3<f32>,
   ray_direction: vec3<f32>,
   ray: ProductionRay,
-  solar_radiance: vec3<f32>,
+  background_radiance: vec3<f32>,
   step_count: u32,
 ) -> vec3<f32> {
   let entry_position =
@@ -1257,7 +1258,8 @@ fn integrate_production_final(
     max(ray.segment_end - ray.segment_start, 0.0),
     step_count,
   );
-  var radiance = transfer.radiance;
+  var radiance =
+    transfer.radiance + transfer.transmittance * background_radiance;
 
   if (ray.hits_ground == 1u) {
     let surface_position =
@@ -1267,13 +1269,10 @@ fn integrate_production_final(
         * transfer.transmittance
         + transfer.radiance;
     radiance = mix(
-      transfer.radiance,
+      radiance,
       ground_radiance,
       ray.ground_coverage,
     );
-  } else if (ray.sun_coverage > 0.0) {
-    radiance +=
-      transfer.transmittance * solar_radiance * ray.sun_coverage;
   }
 
   return radiance;
@@ -1325,6 +1324,48 @@ fn sun_spectral_as_sky_spectral(spectral_radiance: vec3<f32>) -> vec3<f32> {
   return spectral_radiance
     * atmosphere.sun_spectral_to_linear_srgb.xyz
     / atmosphere.sky_spectral_to_linear_srgb.xyz;
+}
+
+fn moon_background_radiance(
+  ray_direction: vec3<f32>,
+) -> vec3<f32> {
+  if (frame.moon_reflectance_enabled.w < 0.5) {
+    return vec3<f32>(0.0);
+  }
+
+  let moon_direction = frame.moon_direction_angular_radius.xyz;
+  let angular_radius = frame.moon_direction_angular_radius.w;
+  let angular_distance = acos(clamp(
+    dot(ray_direction, moon_direction),
+    -1.0,
+    1.0,
+  ));
+  let pixel_angular_width = max(fwidth(angular_distance), 1.0e-6);
+  let coverage = 1.0 - smoothstep(
+    angular_radius - 0.5 * pixel_angular_width,
+    angular_radius + 0.5 * pixel_angular_width,
+    angular_distance,
+  );
+
+  let normalized_center_distance = 1.0 / sin(angular_radius);
+  let center = moon_direction * normalized_center_distance;
+  let center_projection = dot(ray_direction, center);
+  let discriminant =
+    center_projection * center_projection
+      - (dot(center, center) - 1.0);
+  let surface_distance =
+    center_projection - sqrt(max(discriminant, 0.0));
+  let surface_normal =
+    normalize(ray_direction * surface_distance - center);
+  let sun_cosine =
+    max(dot(surface_normal, frame.sun_direction.xyz), 0.0);
+  let reflected_radiance =
+    atmosphere.solar_irradiance_w_m2_nm.xyz
+      * frame.moon_reflectance_enabled.xyz
+      * sun_cosine
+      / PI;
+
+  return sun_spectral_as_sky_spectral(reflected_radiance) * coverage;
 }
 
 fn sky_spectral_to_linear_srgb(spectral_radiance: vec3<f32>) -> vec3<f32> {
@@ -1421,6 +1462,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     sun_spectral_as_sky_spectral(
       atmosphere.solar_irradiance_w_m2_nm.xyz / sun_solid_angle,
     );
+  let background_radiance =
+    solar_radiance * sun_coverage
+      + moon_background_radiance(ray_direction);
   let debug_view = u32(frame.quality_debug.z);
 
   if (debug_view == 1u) {
@@ -1556,7 +1600,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
       segment_end,
       ground_hit.near,
       ground_coverage,
-      sun_coverage,
       select(0u, 1u, hits_ground),
     );
 
@@ -1566,7 +1609,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
           camera_planet_position,
           ray_direction,
           production_ray,
-          solar_radiance,
+          background_radiance,
           u32(frame.integration.x),
         );
       } else {
@@ -1576,13 +1619,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
           frame.sun_direction.xyz,
         );
 
-        if (sun_coverage > 0.0) {
-          sky_radiance +=
-            sample_transmittance_to_top(
-              camera_planet_position,
-              ray_direction,
-            ) * solar_radiance * sun_coverage;
-        }
+        sky_radiance +=
+          sample_transmittance_to_top(
+            camera_planet_position,
+            ray_direction,
+          ) * background_radiance;
 
         radiance = sky_radiance;
 
@@ -1631,7 +1672,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         camera_planet_position,
         ray_direction,
         production_ray,
-        solar_radiance,
+        background_radiance,
         u32(frame.integration.x),
       );
     } else {
@@ -1700,13 +1741,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             * sun_transmittance
             * sun_cosine
             / PI;
-      } else if (sun_coverage > 0.0) {
-        radiance +=
-          segment_transmittance * solar_radiance * sun_coverage;
+      } else {
+        radiance += segment_transmittance * background_radiance;
       }
     }
-  } else if (sun_coverage > 0.0) {
-    radiance = solar_radiance * sun_coverage;
+  } else {
+    radiance = background_radiance;
   }
 
   return vec4<f32>(

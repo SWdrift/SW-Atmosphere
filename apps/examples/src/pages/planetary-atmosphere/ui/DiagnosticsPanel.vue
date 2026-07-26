@@ -12,8 +12,16 @@ function formatDistance(value: number): string {
   return `${value.toFixed(value < 100 ? 2 : 1)} km`
 }
 
-function formatVector(vector: Vec3): string {
+function formatVector(vector: Vec3 | null): string {
+  if (vector === null) {
+    return '—'
+  }
+
   return vector.map((component) => component.toFixed(2)).join(', ')
+}
+
+function formatAngle(degrees: number | null): string {
+  return degrees === null ? '—' : `${degrees.toFixed(2)}°`
 }
 </script>
 
@@ -45,6 +53,24 @@ function formatVector(vector: Vec3): string {
       </el-descriptions-item>
       <el-descriptions-item label="位置 km">
         {{ formatVector(store.runtime.telemetry.position) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="View forward">
+        {{ formatVector(store.runtime.telemetry.viewForward) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="Body right">
+        {{ formatVector(store.runtime.telemetry.bodyRight) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="Body forward">
+        {{ formatVector(store.runtime.telemetry.bodyForward) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="Body up">
+        {{ formatVector(store.runtime.telemetry.bodyUp) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="观察偏航角">
+        {{ formatAngle(store.runtime.telemetry.lookYawDegrees) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="观察俯仰角">
+        {{ formatAngle(store.runtime.telemetry.lookPitchDegrees) }}
       </el-descriptions-item>
       <el-descriptions-item label="帧时间">
         {{ store.runtime.telemetry.frameMilliseconds.toFixed(2) }} ms

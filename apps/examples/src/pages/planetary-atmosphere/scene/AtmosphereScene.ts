@@ -4,22 +4,24 @@ import {
   type AtmosphereRendererInfo,
 } from '../atmosphere/AtmosphereRenderer.ts'
 import {
+  EARTH_MOON,
+  observeMoon,
+} from '../celestial/MoonParameters.ts'
+import {
   CameraController,
   type CameraMode,
 } from '../camera/CameraController.ts'
 import {
-  INITIAL_CAMERA_ALTITUDE_KM,
+  cameraPresetPose,
   type CameraPresetId,
   type CameraPresetPose,
 } from '../camera/cameraPresets.ts'
 import { PlanetCamera } from '../camera/PlanetCamera.ts'
 import {
   altitudeFromPosition,
-  INITIAL_CAMERA_RADIAL,
   sunDirectionFromAngles,
-  WORLD_UP,
 } from '../math/coordinates.ts'
-import { dot, scale } from '../math/vector3.ts'
+import { dot, type Vec3 } from '../math/vector3.ts'
 import type {
   AtmosphereControls,
   AtmosphereTelemetry,
@@ -76,12 +78,14 @@ export class AtmosphereScene {
     events: AtmosphereSceneEvents,
   ): Promise<AtmosphereScene> {
     const controls = getControls()
-    const initialRadius =
-      EARTH_ATMOSPHERE.bottomRadiusKm + INITIAL_CAMERA_ALTITUDE_KM
+    const initialPose = cameraPresetPose(
+      'surface',
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
     const camera = new PlanetCamera(
-      scale(INITIAL_CAMERA_RADIAL, initialRadius),
-      [1, 0, 0],
-      WORLD_UP,
+      initialPose.position,
+      initialPose.forward,
+      initialPose.up,
       controls.camera.verticalFovDegrees,
     )
     const controller = new CameraController(
@@ -90,10 +94,12 @@ export class AtmosphereScene {
       EARTH_ATMOSPHERE.bottomRadiusKm,
       events.adjustSpeedExponent,
     )
+    controller.resetEquatorialBody()
     let scene: AtmosphereScene | null = null
     const renderer = await AtmosphereRenderer.create(
       renderingCanvas,
       EARTH_ATMOSPHERE,
+      EARTH_MOON,
       (message) => {
         if (scene === null) {
           throw new Error('场景完成创建前收到了渲染器运行时错误。')
@@ -167,6 +173,28 @@ export class AtmosphereScene {
     this.controller.applyPreset(id)
   }
 
+  resetEquatorialBody(): void {
+    this.controller.resetEquatorialBody()
+  }
+
+  resetBodyToWorldBasis(): void {
+    this.controller.resetBodyToWorldBasis()
+  }
+
+  setFreePosition(position: Vec3): void {
+    this.controller.setFreePosition(position)
+  }
+
+  setFreeLookAngles(
+    yawRadians: number,
+    pitchRadians: number,
+  ): void {
+    this.controller.setFreeLookAngles({
+      yawRadians,
+      pitchRadians,
+    })
+  }
+
   setCameraPose(pose: CameraPresetPose): void {
     this.controller.setPose(pose)
   }
@@ -201,14 +229,26 @@ export class AtmosphereScene {
       deltaSeconds,
       controls.camera.speedExponent,
     )
+    const bodyLookFrame = this.controller.getBodyLookFrame()
 
     const sunDirection = sunDirectionFromAngles(
       controls.sun.azimuthDegrees,
       controls.sun.elevationDegrees,
     )
+    const moon = observeMoon(
+      EARTH_MOON,
+      this.camera.position,
+      sunDirectionFromAngles(
+        controls.moon.azimuthDegrees,
+        controls.moon.elevationDegrees,
+      ),
+    )
     const frameResult = this.renderer.render({
       camera: this.camera,
       sunDirection,
+      moonDirection: moon.directionFromCamera,
+      moonAngularRadiusRadians: moon.angularRadiusRadians,
+      moonEnabled: controls.moon.enabled,
       exposure: controls.rendering.exposure,
       geometryDebug: controls.debug.geometry,
       quality: controls.rendering.quality,
@@ -223,12 +263,15 @@ export class AtmosphereScene {
       mieEnabled: controls.rendering.mieEnabled,
       ozoneEnabled: controls.rendering.ozoneEnabled,
     })
-    this.overlay.render(
-      this.camera,
-      controls.debug.gridPlane,
-      controls.debug.grid,
-      controls.debug.skyGrid,
-    )
+    this.overlay.render({
+      camera: this.camera,
+      bodyLookAngles: bodyLookFrame,
+      plane: controls.debug.gridPlane,
+      worldGridVisible: controls.debug.grid,
+      skyGridVisible: controls.debug.skyGrid,
+      axesIndicatorVisible: controls.debug.axesIndicator,
+      attitudeIndicatorVisible: controls.debug.attitudeIndicator,
+    })
 
     this.smoothedFrameMilliseconds =
       this.smoothedFrameMilliseconds === 0
@@ -260,6 +303,19 @@ export class AtmosphereScene {
         targetSpeedKmPerSecond:
           this.controller.targetSpeedKmPerSecond,
         position: this.camera.position,
+        viewForward: this.camera.forward,
+        bodyRight: bodyLookFrame === null ? null : bodyLookFrame.right,
+        bodyForward:
+          bodyLookFrame === null ? null : bodyLookFrame.forward,
+        bodyUp: bodyLookFrame === null ? null : bodyLookFrame.up,
+        lookYawDegrees:
+          bodyLookFrame === null
+            ? null
+            : (bodyLookFrame.yawRadians * 180) / Math.PI,
+        lookPitchDegrees:
+          bodyLookFrame === null
+            ? null
+            : (bodyLookFrame.pitchRadians * 180) / Math.PI,
         frameMilliseconds: this.smoothedFrameMilliseconds,
         submitMilliseconds: frameResult.submitMilliseconds,
         rebuiltPasses:

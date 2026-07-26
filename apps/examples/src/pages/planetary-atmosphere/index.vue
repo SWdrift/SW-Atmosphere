@@ -12,6 +12,10 @@ const overlayCanvas = ref<HTMLCanvasElement | null>(null)
 const store = useAtmosphereStore()
 const {
   applyCameraPreset,
+  resetBodyToWorldBasis,
+  resetEquatorialBody,
+  setFreeLookAnglesDegrees,
+  setFreePosition,
   restoreEarthDefaults,
   workbench,
 } = useAtmosphereScene(renderingCanvas, overlayCanvas)
@@ -90,7 +94,11 @@ const activeReference = computed(() =>
       <AtmospherePanel>
         <template #parameters>
           <ParametersPanel
+            @reset-body-to-world-basis="resetBodyToWorldBasis"
+            @reset-equatorial-body="resetEquatorialBody"
             @restore-defaults="restoreEarthDefaults"
+            @set-free-look-angles="setFreeLookAnglesDegrees"
+            @set-free-position="setFreePosition"
           />
         </template>
 
@@ -115,11 +123,15 @@ const activeReference = computed(() =>
 
 <style scoped>
 .planetary-atmosphere {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
   min-width: 0;
 }
 
 .page-header {
+  flex: 0 0 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -128,10 +140,10 @@ const activeReference = computed(() =>
 }
 
 .workspace {
+  flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 12px;
-  height: calc(100% - 40px);
   min-height: 0;
 }
 
@@ -168,10 +180,12 @@ const activeReference = computed(() =>
 }
 
 .debug-overlay {
+  z-index: 2;
   pointer-events: none;
 }
 
 .reference-overlay {
+  z-index: 1;
   position: absolute;
   inset: 0;
   display: grid;
@@ -196,6 +210,7 @@ const activeReference = computed(() =>
 }
 
 .error {
+  z-index: 3;
   position: absolute;
   right: 12px;
   bottom: 12px;
@@ -208,6 +223,7 @@ const activeReference = computed(() =>
   }
 
   .workspace {
+    flex: none;
     grid-template-columns: 1fr;
     height: auto;
   }

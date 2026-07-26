@@ -3,7 +3,10 @@ import {
   CAMERA_PRESETS,
   type CameraPresetId,
 } from '../camera/cameraPresets.ts'
-import { VALIDATION_CASES } from '../model/validationCases.ts'
+import {
+  VALIDATION_CASE_CATEGORIES,
+  VALIDATION_CASES,
+} from '../model/validationCases.ts'
 import { useAtmosphereStore } from '../model/atmosphereStore.ts'
 
 const emit = defineEmits<{
@@ -61,20 +64,37 @@ function setReferenceMix(value: number | number[]): void {
 
   <section class="panel-section">
     <h2>验证用例</h2>
-    <div class="preset-buttons">
-      <el-button
-        v-for="validationCase in VALIDATION_CASES"
-        :key="validationCase.id"
-        :type="
-          store.workbench.activeCaseId === validationCase.id
-            ? 'primary'
-            : 'default'
-        "
-        :disabled="store.runtime.phase !== 'running'"
-        @click="emit('activate-case', validationCase.id)"
+    <div
+      v-for="category in VALIDATION_CASE_CATEGORIES"
+      :key="category.id"
+      class="case-category"
+    >
+      <div class="case-category-title">{{ category.label }}</div>
+      <div
+        v-for="group in category.groups"
+        :key="group.id"
+        class="case-group"
       >
-        {{ validationCase.label }}
-      </el-button>
+        <h3>{{ group.label }}</h3>
+        <el-text class="case-group-description" size="small" type="info">
+          {{ group.description }}
+        </el-text>
+        <div class="preset-buttons case-buttons">
+          <el-button
+            v-for="validationCase in group.cases"
+            :key="validationCase.id"
+            :type="
+              store.workbench.activeCaseId === validationCase.id
+                ? 'primary'
+                : 'default'
+            "
+            :disabled="store.runtime.phase !== 'running'"
+            @click="emit('activate-case', validationCase.id)"
+          >
+            {{ validationCase.label }}
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <el-alert
@@ -106,6 +126,9 @@ function setReferenceMix(value: number | number[]): void {
     </div>
 
     <template v-if="activeValidationCase">
+      <el-text class="case-objective" size="small">
+        {{ activeValidationCase.objective }}
+      </el-text>
       <template v-if="activeReference">
         <el-text size="small" type="info">
           {{ activeReference.comparable }}
@@ -151,15 +174,56 @@ function setReferenceMix(value: number | number[]): void {
   font-size: 14px;
 }
 
+.case-category + .case-category {
+  margin-top: 18px;
+}
+
+.case-category-title {
+  margin-bottom: 8px;
+  color: var(--el-color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.case-group {
+  padding: 9px 10px 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
+  background: var(--el-fill-color-extra-light);
+}
+
+.case-group + .case-group {
+  margin-top: 8px;
+}
+
+.case-group h3 {
+  margin: 0 0 3px;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.case-group-description {
+  display: block;
+  line-height: 1.45;
+}
+
 .preset-buttons {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
+.case-buttons {
+  margin-top: 6px;
+}
+
 .preset-buttons .el-button {
   width: 100%;
+  height: auto;
   margin: 0;
+  white-space: normal;
 }
 
 .workbench-error,
@@ -183,6 +247,11 @@ function setReferenceMix(value: number | number[]): void {
 .reference-note {
   display: block;
   margin-top: 4px;
+}
+
+.case-objective {
+  display: block;
+  margin-top: 10px;
 }
 
 .path-controls {

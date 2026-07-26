@@ -7,10 +7,13 @@ import {
 } from 'vitest'
 import {
   cloneAtmosphereControls,
+  createEarthControls,
 } from '../model/atmosphereState.ts'
 import { useAtmosphereStore } from '../model/atmosphereStore.ts'
 import {
   createValidationControls,
+  type ValidationCaseGroup,
+  VALIDATION_CASE_CATEGORIES,
   VALIDATION_CASES,
   validationCaseById,
   validationCasePath,
@@ -21,9 +24,47 @@ import {
   type WorkbenchPathPort,
 } from '../model/workbenchPath.ts'
 import { atmospherePanelIdFromPath } from '../panelRoutes.ts'
+import { EARTH_ATMOSPHERE } from '../atmosphere/AtmosphereParameters.ts'
+import { cameraPresetPose } from '../camera/cameraPresets.ts'
+import { sunDirectionFromAngles } from '../math/coordinates.ts'
+import {
+  cross,
+  dot,
+  length,
+  normalize,
+} from '../math/vector3.ts'
+import { close } from './assertions.ts'
 
 beforeEach(() => {
   setActivePinia(createPinia())
+})
+
+test('初始状态使用 1.5 m 可见地平线姿态和当地太阳 +20°', () => {
+  const controls = createEarthControls()
+  const pose = cameraPresetPose(
+    'surface',
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+  )
+  const sunDirection = sunDirectionFromAngles(
+    controls.sun.azimuthDegrees,
+    controls.sun.elevationDegrees,
+  )
+  const localUp = normalize(pose.position)
+  const localSunElevationDegrees =
+    (Math.asin(dot(sunDirection, localUp)) * 180) / Math.PI
+
+  close(
+    length(pose.position) - EARTH_ATMOSPHERE.bottomRadiusKm,
+    0.0015,
+    1e-10,
+  )
+  close(
+    length(cross(pose.position, pose.forward)),
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+    1e-8,
+  )
+  close(localSunElevationDegrees, 20, 1e-10)
+  assert.ok(dot(sunDirection, pose.up) > 0)
 })
 
 test('Store 是默认值、质量约束和速度指数的唯一真相', () => {
@@ -77,6 +118,8 @@ test('验证用例具有稳定 URL、完整基线和未知 ID 语义', () => {
   assert.equal(controls.camera.verticalFovDegrees, 20)
   assert.equal(controls.rendering.debugView, 'final')
   assert.equal(controls.debug.grid, false)
+  assert.equal(controls.debug.axesIndicator, true)
+  assert.equal(controls.debug.attitudeIndicator, true)
   assert.throws(() => validationCaseById('unknown'))
   assert.throws(() =>
     atmospherePanelIdFromPath('/planetary-atmosphere/unknown'),
@@ -151,6 +194,118 @@ test('动作路径按声明顺序执行并恢复人工输入', async () => {
   ])
 })
 
+test('limb 动作路径中点仍精确相切', async () => {
+  const validationCase = validationCaseById('space-limb')
+  assert.ok(validationCase.path)
+  const poses: Parameters<WorkbenchPathPort['setCameraPose']>[0][] = []
+  const port: WorkbenchPathPort = {
+    setControls: () => {},
+    setCameraPose: (pose) => poses.push(pose),
+    setManualInputEnabled: () => {},
+    checkpoint: () => {},
+  }
+  const clock: WorkbenchPathClock = {
+    async elapse(_duration, update, signal): Promise<void> {
+      signal.throwIfAborted()
+      update(0.5)
+    },
+  }
+
+  await executeWorkbenchPath(
+    validationCase.path,
+    port,
+    new AbortController().signal,
+    clock,
+  )
+
+  const midpoint = poses.at(-1)
+  assert.ok(midpoint)
+  close(
+    length(cross(midpoint.position, midpoint.forward)),
+    EARTH_ATMOSPHERE.bottomRadiusKm,
+    1e-8,
+  )
+  close(
+    length(midpoint.position) - EARTH_ATMOSPHERE.bottomRadiusKm,
+    600,
+    1e-8,
+  )
+})
+
+test('验证用例的当地太阳高度、相位与取景范围满足数值定义', () => {
+  const localElevationCases = [
+    ['ground-day-sunward', 20],
+    ['ground-sun-plus-five', 5],
+    ['ground-sun-zero', 0],
+    ['ground-sun-minus-one', -1],
+    ['ground-civil-twilight', -6],
+    ['ground-nautical-twilight', -12],
+    ['ground-astronomical-twilight', -18],
+  ] as const
+
+  for (const [id, expectedElevationDegrees] of localElevationCases) {
+    const validationCase = validationCaseById(id)
+    const controls = createValidationControls(validationCase)
+    const pose = cameraPresetPose(
+      validationCase.cameraPreset,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
+    const sunDirection = sunDirectionFromAngles(
+      controls.sun.azimuthDegrees,
+      controls.sun.elevationDegrees,
+    )
+    const localElevationDegrees =
+      (Math.asin(dot(sunDirection, normalize(pose.position))) * 180) /
+      Math.PI
+
+    close(localElevationDegrees, expectedElevationDegrees, 1e-10)
+  }
+
+  const phaseCases = [
+    ['planetary-day', 0],
+    ['planetary-terminator', 90],
+    ['planetary-crescent', 160],
+  ] as const
+
+  for (const [id, expectedPhaseDegrees] of phaseCases) {
+    const validationCase = validationCaseById(id)
+    const controls = createValidationControls(validationCase)
+    const pose = cameraPresetPose(
+      validationCase.cameraPreset,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
+    const sunDirection = sunDirectionFromAngles(
+      controls.sun.azimuthDegrees,
+      controls.sun.elevationDegrees,
+    )
+    const phaseDegrees =
+      (Math.acos(dot(sunDirection, normalize(pose.position))) * 180) /
+      Math.PI
+
+    close(phaseDegrees, expectedPhaseDegrees, 1e-10)
+    assert.equal(controls.camera.verticalFovDegrees, 24)
+  }
+
+  for (const id of [
+    'narrow-sunrise',
+    'narrow-sunrise-10',
+    'narrow-sunrise-20',
+  ]) {
+    const validationCase = validationCaseById(id)
+    const controls = createValidationControls(validationCase)
+    const pose = cameraPresetPose(
+      validationCase.cameraPreset,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+    )
+    const sunDirection = sunDirectionFromAngles(
+      controls.sun.azimuthDegrees,
+      controls.sun.elevationDegrees,
+    )
+
+    close(dot(sunDirection, pose.forward), 1, 1e-12)
+  }
+})
+
 test('动作路径取消后恢复输入且不执行后续检查点', async () => {
   const validationCase = validationCaseById('space-limb')
   assert.ok(validationCase.path)
@@ -206,5 +361,79 @@ test('验证用例 ID 唯一且仅部分用例包含完整参考元数据', () =
         item.reference.comparable.length > 0 &&
         item.reference.unknowns.length > 0,
     ),
+  )
+})
+
+test('验证用例目录按分类和分组形成唯一顺序', () => {
+  const categoryIds = new Set(
+    VALIDATION_CASE_CATEGORIES.map((category) => category.id),
+  )
+  const groups = VALIDATION_CASE_CATEGORIES.reduce<
+    ValidationCaseGroup[]
+  >(
+    (result, category) => {
+      result.push(...category.groups)
+      return result
+    },
+    [],
+  )
+  const groupIds = new Set(groups.map((group) => group.id))
+  const groupedCases = groups.flatMap((group) => group.cases)
+
+  assert.equal(
+    categoryIds.size,
+    VALIDATION_CASE_CATEGORIES.length,
+  )
+  assert.equal(groupIds.size, groups.length)
+  assert.ok(groups.every((group) => group.cases.length > 0))
+  assert.deepEqual(
+    groupedCases.map((item) => item.id),
+    VALIDATION_CASES.map((item) => item.id),
+  )
+  assert.ok(
+    VALIDATION_CASES.every(
+      (item) =>
+        item.objective.length > 0 &&
+        validationCasePath(item.id).endsWith(item.id),
+    ),
+  )
+})
+
+test('介质分量和渲染路径用例构建完整可调状态', () => {
+  const rayleigh = createValidationControls(
+    validationCaseById('ground-rayleigh-only'),
+  )
+  const mie = createValidationControls(
+    validationCaseById('ground-mie-only'),
+  )
+  const reference = createValidationControls(
+    validationCaseById('ground-terminator-reference'),
+  )
+  const productionSingle = createValidationControls(
+    validationCaseById('ground-terminator-single'),
+  )
+
+  assert.deepEqual(
+    [
+      rayleigh.rendering.rayleighEnabled,
+      rayleigh.rendering.mieEnabled,
+      rayleigh.rendering.ozoneEnabled,
+    ],
+    [true, false, false],
+  )
+  assert.deepEqual(
+    [
+      mie.rendering.rayleighEnabled,
+      mie.rendering.mieEnabled,
+      mie.rendering.ozoneEnabled,
+    ],
+    [false, true, false],
+  )
+  assert.equal(reference.rendering.quality, 'reference')
+  assert.equal(reference.rendering.multipleScattering, false)
+  assert.equal(productionSingle.rendering.quality, 'high')
+  assert.equal(
+    productionSingle.rendering.multipleScattering,
+    false,
   )
 })
