@@ -4,13 +4,14 @@ import {
 } from '../math/coordinates.ts'
 import {
   add,
+  cross,
   normalize,
   projectOntoPlane,
   scale,
   type Vec3,
 } from '../math/vector3.ts'
 
-export const INITIAL_CAMERA_ALTITUDE_KM = 1.5
+export const INITIAL_CAMERA_ALTITUDE_KM = 0.0015
 
 export const CAMERA_PRESETS = [
   {
@@ -72,6 +73,56 @@ export interface CameraPresetPose {
   up: Vec3
 }
 
+export function horizonDipRadians(
+  altitudeKm: number,
+  planetRadiusKm: number,
+): number {
+  if (
+    !Number.isFinite(altitudeKm) ||
+    altitudeKm < 0 ||
+    !Number.isFinite(planetRadiusKm) ||
+    planetRadiusKm <= 0
+  ) {
+    throw new Error('地平线几何要求有限非负高度和有限正行星半径。')
+  }
+
+  return Math.acos(planetRadiusKm / (planetRadiusKm + altitudeKm))
+}
+
+export function tangentCameraPose(
+  altitudeKm: number,
+  planetRadiusKm: number,
+  rollDegrees = 0,
+): CameraPresetPose {
+  const radiusKm = planetRadiusKm + altitudeKm
+  const position = scale(INITIAL_CAMERA_RADIAL, radiusKm)
+  const localUp = INITIAL_CAMERA_RADIAL
+  const dipRadians = horizonDipRadians(altitudeKm, planetRadiusKm)
+  const forward = normalize(
+    add(
+      scale([1, 0, 0], Math.cos(dipRadians)),
+      scale(localUp, -Math.sin(dipRadians)),
+    ),
+  )
+  const baseUp = normalize(projectOntoPlane(localUp, forward))
+
+  if (!Number.isFinite(rollDegrees)) {
+    throw new Error('摄像机滚转角必须是有限数。')
+  }
+  if (rollDegrees === 0) {
+    return { position, forward, up: baseUp }
+  }
+
+  const rollRadians = (rollDegrees * Math.PI) / 180
+  const right = normalize(cross(forward, baseUp))
+  const up = add(
+    scale(baseUp, Math.cos(rollRadians)),
+    scale(right, Math.sin(rollRadians)),
+  )
+
+  return { position, forward, up }
+}
+
 export function cameraPresetPose(
   id: CameraPresetId,
   planetRadiusKm: number,
@@ -86,33 +137,20 @@ export function cameraPresetPose(
     throw new Error(`未知摄像机预设：${id}`)
   }
 
-  const radius = planetRadiusKm + preset.altitudeKm
-  const position = scale(INITIAL_CAMERA_RADIAL, radius)
-  let forward: Vec3
-  let up = WORLD_UP
-
-  if (preset.view === 'tangent') {
-    forward = [1, 0, 0]
-  } else if (preset.view === 'limb') {
-    forward = [
-      0,
-      Math.sqrt(1 - (planetRadiusKm / radius) ** 2),
-      planetRadiusKm / radius,
-    ]
-  } else {
-    forward = scale(INITIAL_CAMERA_RADIAL, -1)
-  }
-
-  if (preset.rollDegrees !== 0) {
-    const rollRadians = (preset.rollDegrees * Math.PI) / 180
-    const baseRight = normalize(
-      projectOntoPlane(INITIAL_CAMERA_RADIAL, forward),
-    )
-    up = add(
-      scale(baseRight, Math.sin(rollRadians)),
-      scale(WORLD_UP, Math.cos(rollRadians)),
+  if (preset.view === 'tangent' || preset.view === 'limb') {
+    return tangentCameraPose(
+      preset.altitudeKm,
+      planetRadiusKm,
+      preset.rollDegrees,
     )
   }
 
-  return { position, forward, up }
+  return {
+    position: scale(
+      INITIAL_CAMERA_RADIAL,
+      planetRadiusKm + preset.altitudeKm,
+    ),
+    forward: scale(INITIAL_CAMERA_RADIAL, -1),
+    up: WORLD_UP,
+  }
 }

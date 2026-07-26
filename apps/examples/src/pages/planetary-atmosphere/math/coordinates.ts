@@ -1,6 +1,9 @@
 import {
   add,
+  cross,
+  dot,
   normalize,
+  projectOntoPlane,
   scale,
   type Vec3,
 } from './vector3.ts'
@@ -36,6 +39,62 @@ export function sunDirectionFromAngles(
       scale(WORLD_UP, Math.sin(elevation)),
     ),
   )
+}
+
+export function sunAnglesFromDirection(direction: Vec3): {
+  azimuthDegrees: number
+  elevationDegrees: number
+} {
+  const normalizedDirection = normalize(direction)
+
+  return {
+    azimuthDegrees:
+      (Math.atan2(normalizedDirection[0], normalizedDirection[1]) * 180) /
+      Math.PI,
+    elevationDegrees:
+      (Math.asin(normalizedDirection[2]) * 180) / Math.PI,
+  }
+}
+
+export function sunDirectionFromLocalAngles(
+  observerPosition: Vec3,
+  horizonForwardHint: Vec3,
+  azimuthDegrees: number,
+  elevationDegrees: number,
+): Vec3 {
+  if (
+    !Number.isFinite(azimuthDegrees) ||
+    !Number.isFinite(elevationDegrees) ||
+    elevationDegrees < -90 ||
+    elevationDegrees > 90
+  ) {
+    throw new Error('当地太阳方位必须有限，高度必须位于 -90° 到 90°。')
+  }
+
+  const localUp = localUpFromPosition(observerPosition)
+  const horizonForward = normalize(
+    projectOntoPlane(horizonForwardHint, localUp),
+  )
+  const horizonRight = normalize(cross(horizonForward, localUp))
+  const azimuthRadians = (azimuthDegrees * Math.PI) / 180
+  const elevationRadians = (elevationDegrees * Math.PI) / 180
+  const horizonDirection = add(
+    scale(horizonForward, Math.cos(azimuthRadians)),
+    scale(horizonRight, Math.sin(azimuthRadians)),
+  )
+
+  const direction = normalize(
+    add(
+      scale(horizonDirection, Math.cos(elevationRadians)),
+      scale(localUp, Math.sin(elevationRadians)),
+    ),
+  )
+
+  if (Math.abs(dot(direction, localUp) - Math.sin(elevationRadians)) > 1e-12) {
+    throw new Error('当地太阳方向未满足目标高度角。')
+  }
+
+  return direction
 }
 
 export function cameraRayDirection(

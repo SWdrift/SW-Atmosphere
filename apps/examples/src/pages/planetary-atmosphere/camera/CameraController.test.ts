@@ -9,8 +9,14 @@ import {
   automaticSpeedKmPerSecond,
   CameraController,
 } from './CameraController.ts'
-import { CAMERA_PRESETS } from './cameraPresets.ts'
 import {
+  CAMERA_PRESETS,
+  cameraPresetPose,
+  horizonDipRadians,
+  INITIAL_CAMERA_ALTITUDE_KM,
+} from './cameraPresets.ts'
+import {
+  freeBodyBasis,
   freeViewBasis,
   rollFreeBody,
   type FreeView,
@@ -98,7 +104,7 @@ test('Orbit 回切 Free 时恢复进入前的完整位姿', () => {
   assert.equal(controller.mode, 'free')
 })
 
-test('偏转时 WASD 跟随最终局部基且 Q/E 旋转 Body', () => {
+test('偏转时平移跟随最终局部基且 Q/E 旋转 Body', () => {
   const camera = new PlanetCamera(
     [0, 0, 100_000],
     [0, 1, 0],
@@ -183,4 +189,187 @@ test('偏转时 WASD 跟随最终局部基且 Q/E 旋转 Body', () => {
   assert.ok(
     isUnitQuaternion(rollControls.freeView.bodyOrientation),
   )
+})
+
+test('Space/C 沿横滚后的身体局部 up 上升和下降', () => {
+  const rolledBody = rollFreeBody(
+    {
+      bodyOrientation: [0, 0, 0, 1],
+      yawRadians: 0,
+      pitchRadians: 0,
+    },
+    Math.PI / 3,
+  )
+  const rolledView: FreeView = {
+    ...rolledBody,
+    pitchRadians: 0.4,
+  }
+  const bodyUp = freeBodyBasis(rolledView).up
+  const rolledBasis = freeViewBasis(rolledView)
+
+  for (const [key, expectedDirection] of [
+    ['Space', 1],
+    ['KeyC', -1],
+  ] as const) {
+    const camera = new PlanetCamera(
+      [0, 0, 100_000],
+      rolledBasis.forward,
+      rolledBasis.up,
+      60,
+    )
+    const controller = new CameraController(
+      {} as HTMLCanvasElement,
+      camera,
+      EARTH_ATMOSPHERE.bottomRadiusKm,
+      () => {},
+    )
+    const controls = controller as unknown as {
+      pressedKeys: Set<string>
+      freeView: FreeView
+      updateFreeFlight(
+        deltaSeconds: number,
+        speedExponent: number,
+      ): void
+    }
+    controls.freeView = rolledView
+    const positionBeforeMove = camera.position
+
+    controls.pressedKeys.add(key)
+    controls.updateFreeFlight(1, 0)
+
+    const displacement = [
+      camera.position[0] - positionBeforeMove[0],
+      camera.position[1] - positionBeforeMove[1],
+      camera.position[2] - positionBeforeMove[2],
+    ] as const
+    close(
+      dot(normalize(displacement), bodyUp),
+      expectedDirection,
+      1e-9,
+    )
+    assert.ok(Math.abs(dot(normalize(displacement), camera.up)) < 0.99)
+  }
+})
+
+test('快捷视角分别重置赤道 Body/Look 与世界 Body 基准', () => {
+  const planetRadiusKm = EARTH_ATMOSPHERE.bottomRadiusKm
+  const camera = new PlanetCamera(
+    [100, -planetRadiusKm - 20, 50],
+    [0.3, 0.8, 0.2],
+    [0, 0, 1],
+    60,
+  )
+  const controller = new CameraController(
+    {} as HTMLCanvasElement,
+    camera,
+    planetRadiusKm,
+    () => {},
+  )
+
+  controller.resetEquatorialBody()
+
+  const surfacePose = cameraPresetPose('surface', planetRadiusKm)
+  const equatorialInternal = controller as unknown as {
+    freeView: FreeView
+  }
+  const equatorialBody = freeBodyBasis(equatorialInternal.freeView)
+  close(dot(equatorialBody.forward, [1, 0, 0]), 1)
+  close(dot(equatorialBody.up, [0, -1, 0]), 1)
+  close(
+    equatorialInternal.freeView.pitchRadians,
+    -horizonDipRadians(INITIAL_CAMERA_ALTITUDE_KM, planetRadiusKm),
+    1e-12,
+  )
+  close(dot(camera.forward, surfacePose.forward), 1, 1e-12)
+  close(dot(camera.up, surfacePose.up), 1, 1e-12)
+  assert.deepEqual(camera.position, surfacePose.position)
+
+  const positionBeforeWorldReset = camera.position
+  controller.resetBodyToWorldBasis()
+
+  assert.deepEqual(camera.position, positionBeforeWorldReset)
+  close(dot(camera.right, [1, 0, 0]), 1)
+  close(dot(camera.forward, [0, 1, 0]), 1)
+  close(dot(camera.up, [0, 0, 1]), 1)
+  const worldFrame = controller.getBodyLookFrame()
+  assert.ok(worldFrame)
+  close(dot(worldFrame.right, [1, 0, 0]), 1)
+  close(dot(worldFrame.forward, [0, 1, 0]), 1)
+  close(dot(worldFrame.up, [0, 0, 1]), 1)
+  assert.deepEqual({
+    yawRadians: worldFrame.yawRadians,
+    pitchRadians: worldFrame.pitchRadians,
+  }, {
+    yawRadians: 0,
+    pitchRadians: 0,
+  })
+})
+
+test('Free 位置和 Look 角编辑分别保持另一组姿态真相不变', () => {
+  const planetRadiusKm = EARTH_ATMOSPHERE.bottomRadiusKm
+  const camera = new PlanetCamera(
+    [0, -planetRadiusKm - 20, 0],
+    [1, 0, 0],
+    [0, 0, 1],
+    60,
+  )
+  const controller = new CameraController(
+    {} as HTMLCanvasElement,
+    camera,
+    planetRadiusKm,
+    () => {},
+  )
+  const initialBody = controller.getBodyLookFrame()
+  assert.ok(initialBody)
+  const initialForward = camera.forward
+  const initialUp = camera.up
+  const editedPosition = [20, -planetRadiusKm - 30, 10] as const
+
+  controller.setFreePosition(editedPosition)
+
+  assert.deepEqual(camera.position, editedPosition)
+  assert.deepEqual(camera.forward, initialForward)
+  assert.deepEqual(camera.up, initialUp)
+  assert.deepEqual(controller.getBodyLookFrame(), initialBody)
+
+  controller.setFreeLookAngles({
+    yawRadians: 0.5,
+    pitchRadians: -0.25,
+  })
+
+  const editedFrame = controller.getBodyLookFrame()
+  assert.ok(editedFrame)
+  assert.deepEqual(editedFrame.right, initialBody.right)
+  assert.deepEqual(editedFrame.forward, initialBody.forward)
+  assert.deepEqual(editedFrame.up, initialBody.up)
+  close(editedFrame.yawRadians, 0.5)
+  close(editedFrame.pitchRadians, -0.25)
+  assert.notDeepEqual(camera.forward, initialForward)
+
+  assert.throws(() => {
+    controller.setFreePosition([0, 0, planetRadiusKm])
+  })
+  assert.throws(() => {
+    controller.setFreeLookAngles({
+      yawRadians: Math.PI + 0.01,
+      pitchRadians: 0,
+    })
+  })
+  assert.throws(() => {
+    controller.setFreeLookAngles({
+      yawRadians: 0,
+      pitchRadians: Math.PI / 2,
+    })
+  })
+
+  controller.setMode('orbit')
+  assert.throws(() => {
+    controller.setFreePosition(editedPosition)
+  })
+  assert.throws(() => {
+    controller.setFreeLookAngles({
+      yawRadians: 0,
+      pitchRadians: 0,
+    })
+  })
 })

@@ -28,6 +28,24 @@ export interface FreeViewBasis {
   up: Vec3
 }
 
+export interface BodyLookAngles {
+  yawRadians: number
+  pitchRadians: number
+}
+
+export interface BodyLookFrame extends BodyLookAngles, FreeViewBasis {}
+
+function assertFreeView(view: FreeView): void {
+  if (
+    !isUnitQuaternion(view.bodyOrientation) ||
+    !Number.isFinite(view.yawRadians) ||
+    !Number.isFinite(view.pitchRadians) ||
+    Math.abs(view.pitchRadians) > CAMERA_PITCH_LIMIT_RADIANS
+  ) {
+    throw new Error('自由摄像机必须使用单位 Body 姿态和 ±89° 内的有限观察角。')
+  }
+}
+
 export function freeViewFromBasis(forward: Vec3, up: Vec3): FreeView {
   const normalizedForward = normalize(forward)
   const normalizedUp = normalize(projectOntoPlane(up, normalizedForward))
@@ -44,16 +62,24 @@ export function freeViewFromBasis(forward: Vec3, up: Vec3): FreeView {
   }
 }
 
-export function freeViewBasis(view: FreeView): FreeViewBasis {
-  if (
-    !isUnitQuaternion(view.bodyOrientation) ||
-    !Number.isFinite(view.yawRadians) ||
-    !Number.isFinite(view.pitchRadians) ||
-    Math.abs(view.pitchRadians) > CAMERA_PITCH_LIMIT_RADIANS
-  ) {
-    throw new Error('自由摄像机必须使用单位 Body 姿态和 ±89° 内的有限观察角。')
-  }
+export function freeBodyBasis(view: FreeView): FreeViewBasis {
+  assertFreeView(view)
 
+  return {
+    right: normalize(
+      rotateVectorByQuaternion([1, 0, 0], view.bodyOrientation),
+    ),
+    forward: normalize(
+      rotateVectorByQuaternion([0, 1, 0], view.bodyOrientation),
+    ),
+    up: normalize(
+      rotateVectorByQuaternion([0, 0, 1], view.bodyOrientation),
+    ),
+  }
+}
+
+export function freeViewBasis(view: FreeView): FreeViewBasis {
+  assertFreeView(view)
   const yaw = quaternionFromAxisAngle([0, 0, -1], view.yawRadians)
   const pitch = quaternionFromAxisAngle([1, 0, 0], view.pitchRadians)
   const orientation = normalizeQuaternion(

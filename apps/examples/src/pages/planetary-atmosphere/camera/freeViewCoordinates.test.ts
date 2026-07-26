@@ -3,11 +3,28 @@ import { CAMERA_PITCH_LIMIT_RADIANS } from '../math/coordinates.ts'
 import { dot } from '../math/vector3.ts'
 import { close } from '../test/assertions.ts'
 import {
+  freeBodyBasis,
   freeViewBasis,
   rollFreeBody,
   rotateFreeView,
   type FreeView,
 } from './freeViewCoordinates.ts'
+
+test('Body 基不受 Look yaw/pitch 影响', () => {
+  const bodyOnly: FreeView = {
+    bodyOrientation: [0, 0, 0, 1],
+    yawRadians: 0,
+    pitchRadians: 0,
+  }
+  const lookingAway: FreeView = {
+    ...bodyOnly,
+    yawRadians: 0.7,
+    pitchRadians: 0.4,
+  }
+
+  assert.deepEqual(freeBodyBasis(bodyOnly), freeBodyBasis(lookingAway))
+  assert.notDeepEqual(freeViewBasis(bodyOnly), freeViewBasis(lookingAway))
+})
 
 test('Body 偏转前后鼠标观察规律一致', () => {
   const levelView: FreeView = {

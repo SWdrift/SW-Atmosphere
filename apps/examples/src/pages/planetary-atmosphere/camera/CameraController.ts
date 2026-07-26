@@ -1,10 +1,13 @@
 import {
   altitudeFromPosition,
+  CAMERA_PITCH_LIMIT_RADIANS,
+  WORLD_FORWARD,
   WORLD_UP,
 } from '../math/coordinates.ts'
 import {
   add,
   dot,
+  isFiniteVector,
   length,
   lerp,
   normalize,
@@ -14,10 +17,15 @@ import {
 } from '../math/vector3.ts'
 import {
   cameraPresetPose,
+  horizonDipRadians,
+  INITIAL_CAMERA_ALTITUDE_KM,
   type CameraPresetId,
   type CameraPresetPose,
 } from './cameraPresets.ts'
 import {
+  type BodyLookAngles,
+  type BodyLookFrame,
+  freeBodyBasis,
   freeViewBasis,
   freeViewFromBasis,
   rollFreeBody,
@@ -34,7 +42,7 @@ import { PlanetCamera } from './PlanetCamera.ts'
 
 export type CameraMode = 'free' | 'orbit'
 
-export const MINIMUM_CAMERA_ALTITUDE_KM = 0.01
+export const MINIMUM_CAMERA_ALTITUDE_KM = INITIAL_CAMERA_ALTITUDE_KM
 
 const MAX_LOCKED_MOUSE_DELTA = 64
 
@@ -44,6 +52,21 @@ export function automaticSpeedKmPerSecond(altitudeKm: number): number {
   }
 
   return Math.max(0.005, Math.min(2_000, Math.max(0, altitudeKm) * 0.05))
+}
+
+export function assertFreeCameraPosition(
+  position: Vec3,
+  planetRadiusKm: number,
+): void {
+  if (
+    !isFiniteVector(position) ||
+    !Number.isFinite(planetRadiusKm) ||
+    planetRadiusKm <= 0 ||
+    length(position) <
+      planetRadiusKm + MINIMUM_CAMERA_ALTITUDE_KM
+  ) {
+    throw new Error('Free 摄像机位置必须位于最低高度球面之外。')
+  }
 }
 
 export class CameraController {
@@ -169,6 +192,11 @@ export class CameraController {
   }
 
   applyPreset(id: CameraPresetId): void {
+    if (id === 'surface' && this.mode === 'free') {
+      this.resetEquatorialBody()
+      return
+    }
+
     const pose = cameraPresetPose(id, this.planetRadiusKm)
 
     this.setPose(pose)
@@ -193,6 +221,90 @@ export class CameraController {
       forward: [...this.camera.forward],
       up: [...this.camera.up],
     }
+  }
+
+  getBodyLookFrame(): BodyLookFrame | null {
+    if (this.mode !== 'free') {
+      return null
+    }
+
+    const bodyBasis = freeBodyBasis(this.freeView)
+
+    return {
+      ...bodyBasis,
+      yawRadians: this.freeView.yawRadians,
+      pitchRadians: this.freeView.pitchRadians,
+    }
+  }
+
+  resetEquatorialBody(): void {
+    if (this.mode !== 'free') {
+      throw new Error('只有 Free 模式可以重置 Body/Look 姿态。')
+    }
+
+    const surfacePose = cameraPresetPose('surface', this.planetRadiusKm)
+    const localUp = normalize(surfacePose.position)
+    const bodyForward = normalize(
+      projectOntoPlane(surfacePose.forward, localUp),
+    )
+    const bodyView = freeViewFromBasis(bodyForward, localUp)
+    this.freeView = {
+      ...bodyView,
+      pitchRadians: -horizonDipRadians(
+        INITIAL_CAMERA_ALTITUDE_KM,
+        this.planetRadiusKm,
+      ),
+    }
+    const basis = freeViewBasis(this.freeView)
+
+    this.camera.setPose(surfacePose.position, basis.forward, basis.up)
+    this.resetInput()
+    this.initializeOrbitFromCamera()
+  }
+
+  resetBodyToWorldBasis(): void {
+    if (this.mode !== 'free') {
+      throw new Error('只有 Free 模式可以重置 Body/Look 姿态。')
+    }
+
+    this.freeView = freeViewFromBasis(WORLD_FORWARD, WORLD_UP)
+    this.applyFreeView()
+    this.resetInput()
+    this.initializeOrbitFromCamera()
+  }
+
+  setFreePosition(position: Vec3): void {
+    if (this.mode !== 'free') {
+      throw new Error('只有 Free 模式可以编辑摄像机位置。')
+    }
+
+    assertFreeCameraPosition(position, this.planetRadiusKm)
+    this.camera.setPose(position, this.camera.forward, this.camera.up)
+    this.resetInput()
+    this.initializeOrbitFromCamera()
+  }
+
+  setFreeLookAngles(angles: BodyLookAngles): void {
+    if (this.mode !== 'free') {
+      throw new Error('只有 Free 模式可以编辑 Look 角。')
+    }
+    if (
+      !Number.isFinite(angles.yawRadians) ||
+      angles.yawRadians < -Math.PI ||
+      angles.yawRadians > Math.PI ||
+      !Number.isFinite(angles.pitchRadians) ||
+      Math.abs(angles.pitchRadians) > CAMERA_PITCH_LIMIT_RADIANS
+    ) {
+      throw new Error('Look yaw 必须位于 ±180°，pitch 必须位于 ±89°。')
+    }
+
+    this.freeView = {
+      ...this.freeView,
+      yawRadians: angles.yawRadians,
+      pitchRadians: angles.pitchRadians,
+    }
+    this.applyFreeView()
+    this.resetInput()
   }
 
   setManualInputEnabled(enabled: boolean): void {
@@ -292,6 +404,8 @@ export class CameraController {
     if (this.pressedKeys.has('KeyS')) desiredLocalDirection = add(desiredLocalDirection, [0, -1, 0])
     if (this.pressedKeys.has('KeyD')) desiredLocalDirection = add(desiredLocalDirection, [1, 0, 0])
     if (this.pressedKeys.has('KeyA')) desiredLocalDirection = add(desiredLocalDirection, [-1, 0, 0])
+    if (this.pressedKeys.has('Space')) desiredLocalDirection = add(desiredLocalDirection, [0, 0, 1])
+    if (this.pressedKeys.has('KeyC')) desiredLocalDirection = add(desiredLocalDirection, [0, 0, -1])
 
     const hasMovementInput = length(desiredLocalDirection) > 1e-12
     const desiredLocalVelocity = hasMovementInput
@@ -304,11 +418,12 @@ export class CameraController {
       desiredLocalVelocity,
       response,
     )
+    const bodyUp = freeBodyBasis(this.freeView).up
     let worldVelocityKmPerSecond = add(
       scale(this.camera.right, this.localVelocityKmPerSecond[0]),
       add(
         scale(this.camera.forward, this.localVelocityKmPerSecond[1]),
-        scale(this.camera.up, this.localVelocityKmPerSecond[2]),
+        scale(bodyUp, this.localVelocityKmPerSecond[2]),
       ),
     )
     this.camera.move(
@@ -333,7 +448,7 @@ export class CameraController {
       this.localVelocityKmPerSecond = [
         dot(worldVelocityKmPerSecond, this.camera.right),
         dot(worldVelocityKmPerSecond, this.camera.forward),
-        dot(worldVelocityKmPerSecond, this.camera.up),
+        dot(worldVelocityKmPerSecond, bodyUp),
       ]
     }
 
@@ -556,7 +671,8 @@ export class CameraController {
     if (
       event.code.startsWith('Key') ||
       event.code.startsWith('Shift') ||
-      event.code.startsWith('Control')
+      event.code.startsWith('Control') ||
+      event.code === 'Space'
     ) {
       event.preventDefault()
       this.pressedKeys.add(event.code)
