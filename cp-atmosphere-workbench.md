@@ -8,7 +8,7 @@
 
 ## Meta Reference
 
-- 先读根目录 `cp-meta.md`、`cp-atmosphere.md`，再读本文件；具体任务同时读取命中的专项 CP，涉及云或动态天气时还要读取 `document/大气与动态天气长期目标.md`。
+- 先读根目录 `cp-meta.md`、上位目标 `document/行星大气与动态天气长期目标.md`、`cp-atmosphere.md`，再读本文件；具体任务同时读取命中的专项 CP。
 - 可复用大气工程记忆读取 `cpm-atmosphere.md`；摄像机路径边界读取 `cp-atmosphere-camera.md`；本 scope 形成稳定工程结论后沉淀到 `cpm-atmosphere-workbench.md`。
 - 同时遵循根目录 `AGENTS.md`、`apps/examples/AGENTS.md` 与 `apps/examples/src/pages/AGENTS.md`。
 - 修改或审查代码时使用 `code-smell-guard`；阶段完成或动态任务区膨胀时使用 `compact-control-plane`。

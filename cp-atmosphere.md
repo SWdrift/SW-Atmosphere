@@ -9,6 +9,7 @@
 ## Meta Reference
 
 - 先读根目录 `cp-meta.md`，再读本文件；可复用记忆读取同目录 `cpm-atmosphere.md`。
+- 长期目标读取 `document/行星大气与动态天气长期目标.md`；大气光学概念、自然视象和读图方法读取 `document/行星大气光学与视象图谱.md`。本 CP 不重复维护这些上位内容。
 - 晴空视觉真实性、晨昏线、光谱颜色和参考图验收读取 `cp-atmosphere-visual.md`；性能工作读取 `cp-atmosphere-performance.md`；页面迭代和 URL 验证读取 `cp-atmosphere-workbench.md`；摄像机坐标、控制、输入、预设和路径接入读取 `cp-atmosphere-camera.md`。
 - 同时遵循根目录 `AGENTS.md` 与 `apps/examples/src/pages/AGENTS.md`。
 - 阶段完成或动态任务区膨胀时使用 `compact-control-plane`。
@@ -59,33 +60,9 @@
 - 不编造性能数据；CPU submit 时间不得称为 GPU 时间。没有目标设备证据时明确写未验证。
 - 不主动启动持久开发服务器；人工浏览器验证使用用户已启动的服务。
 
-### 资料优先级
-
-- Hillaire 2020 与 UnrealEngineSkyAtmosphere：Production LUT、多重散射、地空连续与 3D Aerial Perspective。
-- Bruneton 2008：辐射传输、预计算散射和高阶散射理论。
-- Bruneton 2017：量纲、density profile、纹理坐标往返、数值保护与测试。
-- Maxime Heckel：浏览器教学路径和视觉基线，不作为 Production 性能终点。
-
 ## Task Board
 
-### 当前执行
-
-- [ ] 使用 `斜向晨昏线` 固定场景完成用户侧验收：关闭 XYZ overlay，对照 Medium Final、Aerial L 与 Aerial T，并覆盖 20°/60°/100° 垂直 FOV、Low/Medium/High、静止与缓慢滚转。
-- [ ] 比较 Reference、Production 与 Multi-Scattering debug 的 HDR 数值和显示结果，区分散射阶数差异与曝光问题；禁止修改物理参数或 LUT 输出补偿亮度。
-- [ ] 为 Ground noon、sunset、twilight、space limb 建立亮度、太阳覆盖率和散射开关语义验证。
-- [ ] 建立 Reference/Production 固定像素或低分辨率误差比较及合理阈值。
-- [ ] 在目标设备实测 1080p FPS、GPU 帧时间、LUT 重建频率和瓶颈；不支持 `timestamp-query` 时只报告 CPU submit。
-- [ ] 运行当前工作区的 `pnpm check:quick`、回归测试与构建，并完成 WebGPU validation、shader、固定场景和 LUT debug 复查。
-- [ ] 核对最终完成标准，明确报告未验证项。
-
-### 残留问题响应
-
-- [ ] 若固定场景仍有边界伪影，先记录 Final/Aerial L/Aerial T、FOV、DPR、质量档及运动表现，确认是否仍绑定 froxel 网格。
-- [ ] 修复前测量边界像素比例与 GPU pass；不先采用全屏逐像素积分、扩大 3D LUT、整屏模糊或曝光补偿。
-
-## 当前验收边界
-
-- 默认地表日间应清晰可读，sunset、twilight 和夜侧仍保持亮度层级，不允许全局抬黑或固定环境光。
-- Reference 与 Production 的差异只能来自散射阶数或已知近似；不得存在隐藏曝光、重复太阳因子或路径专属补偿。
-- 太阳圆盘需在不同分辨率、FOV 和缓慢运动下保持物理角尺寸、稳定圆形和连续边缘，并在大气内接受透射衰减。
-- 用户原始斜向近地视角不得出现可辨识的阶梯、froxel 亮斑、地表/天空互染或运动闪烁；边界修复不得改变远离轮廓的 HDR 结果。
+- [ ] 完成视觉 CP 的 Earth clear、太阳、晨昏线和跨尺度验收，并建立 Reference/Production 的线性 HDR 对照。
+- [ ] 完成性能 CP 的分 pass 遥测和目标设备实测，明确 GPU 时间、CPU submit 与未验证项。
+- [ ] 使用固定场景联合复查斜向近地边界、大气顶内外、FOV/质量档和连续运动；问题归因后再进入专项 CP 修复。
+- [ ] 运行 `pnpm check:quick`、回归测试与构建，并完成 WebGPU validation、shader compilation 和 LUT debug 复查。
