@@ -130,6 +130,9 @@ function setReferenceMix(value: number | number[]): void {
         {{ activeValidationCase.objective }}
       </el-text>
       <template v-if="activeReference">
+        <el-text class="reference-alignment" size="small">
+          {{ activeReference.alignment }}
+        </el-text>
         <el-text size="small" type="info">
           {{ activeReference.comparable }}
         </el-text>
@@ -247,6 +250,11 @@ function setReferenceMix(value: number | number[]): void {
 .reference-note {
   display: block;
   margin-top: 4px;
+}
+
+.reference-alignment {
+  display: block;
+  margin: 4px 0;
 }
 
 .case-objective {

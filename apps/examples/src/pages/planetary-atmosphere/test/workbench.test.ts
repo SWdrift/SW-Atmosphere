@@ -25,7 +25,10 @@ import {
 } from '../model/workbenchPath.ts'
 import { atmospherePanelIdFromPath } from '../panelRoutes.ts'
 import { EARTH_ATMOSPHERE } from '../atmosphere/AtmosphereParameters.ts'
-import { cameraPresetPose } from '../camera/cameraPresets.ts'
+import {
+  cameraPresetPose,
+  horizonDipRadians,
+} from '../camera/cameraPresets.ts'
 import { evaluateCelestialScenario } from '../celestial/CelestialSystem.ts'
 import {
   add,
@@ -59,19 +62,16 @@ function sunDirectionForControls(
 
 function moonIlluminatedFraction(
   validationCaseId: string,
-  cameraPresetId: 'surface',
 ): number {
+  const validationCase = validationCaseById(validationCaseId)
   const controls = createValidationControls(
-    validationCaseById(validationCaseId),
+    validationCase,
   )
   const snapshot = evaluateCelestialScenario(
     controls.celestial.scenario,
     controls.celestial.simulationTimeSeconds,
   )
-  const pose = cameraPresetPose(
-    cameraPresetId,
-    EARTH_ATMOSPHERE.bottomRadiusKm,
-  )
+  const pose = validationCase.cameraPose
   const moonToSun = normalize(subtract(
     snapshot.sun.systemPositionKm,
     snapshot.moon.systemPositionKm,
@@ -111,7 +111,8 @@ test('初始状态使用 1.5 m 可见地平线姿态和确定性天体场景', (
 
 test('Store 是默认值、质量约束和速度指数的唯一真相', () => {
   const store = useAtmosphereStore()
-  const spaceLimb = validationCaseById('space-limb')
+  const spaceLimb =
+    validationCaseById('space-limb-day-side')
 
   store.adjustSpeedExponent(100)
   assert.equal(store.controls.camera.speedExponent, 6)
@@ -122,7 +123,7 @@ test('Store 是默认值、质量约束和速度指数的唯一真相', () => {
   assert.throws(() => store.setQuality('unknown'))
 
   store.replaceControls(createValidationControls(spaceLimb))
-  assert.equal(store.controls.camera.verticalFovDegrees, 20)
+  assert.equal(store.controls.camera.verticalFovDegrees, 40)
   assert.equal(store.controls.rendering.quality, 'high')
 
   store.restoreEarthControls()
@@ -145,23 +146,41 @@ test('控制状态可复制 Pinia Proxy 且不共享嵌套对象', () => {
 })
 
 test('验证用例具有稳定 URL、完整基线和未知 ID 语义', () => {
-  const spaceLimb = validationCaseById('space-limb')
+  const spaceLimb =
+    validationCaseById('space-limb-day-side')
+  const planetaryNightSide =
+    validationCaseById('planetary-night-side')
   const controls = createValidationControls(spaceLimb)
 
   assert.equal(
     validationCasePath(spaceLimb.id),
-    '/planetary-atmosphere/presets/space-limb',
+    '/planetary-atmosphere/presets/space-limb-day-side',
   )
   assert.equal(
     atmospherePanelIdFromPath(validationCasePath(spaceLimb.id)),
     'presets',
   )
+  assert.equal(
+    validationCasePath(planetaryNightSide.id),
+    '/planetary-atmosphere/presets/planetary-night-side',
+  )
   assert.equal(controls.camera.mode, 'free')
-  assert.equal(controls.camera.verticalFovDegrees, 20)
+  assert.equal(controls.camera.verticalFovDegrees, 40)
   assert.equal(controls.rendering.debugView, 'final')
   assert.equal(controls.debug.grid, false)
   assert.equal(controls.debug.axesIndicator, true)
   assert.equal(controls.debug.attitudeIndicator, true)
+  for (const retiredId of [
+    'planetary-day',
+    'space-limb',
+    'space-limb-terminator',
+    'narrow-sunrise',
+    'narrow-sunrise-10',
+    'narrow-sunrise-20',
+    'ground-terminator',
+  ]) {
+    assert.throws(() => validationCaseById(retiredId))
+  }
   assert.throws(() => validationCaseById('unknown'))
   assert.throws(() =>
     atmospherePanelIdFromPath('/planetary-atmosphere/unknown'),
@@ -171,10 +190,10 @@ test('验证用例具有稳定 URL、完整基线和未知 ID 语义', () => {
 test('工作台状态形成单向生命周期', () => {
   const store = useAtmosphereStore()
 
-  store.requestValidationCase('space-limb')
+  store.requestValidationCase('space-limb-day-side')
   assert.equal(store.workbench.phase, 'pending')
-  store.beginValidationCaseActivation('space-limb')
-  store.completeValidationCaseActivation('space-limb')
+  store.beginValidationCaseActivation('space-limb-day-side')
+  store.completeValidationCaseActivation('space-limb-day-side')
   assert.equal(store.workbench.phase, 'active')
   assert.equal(store.workbench.referenceVisible, false)
   assert.equal(store.workbench.referenceMix, 0.5)
@@ -196,7 +215,7 @@ test('工作台状态形成单向生命周期', () => {
 })
 
 test('动作路径按声明顺序执行并恢复人工输入', async () => {
-  const validationCase = validationCaseById('space-limb')
+  const validationCase = validationCaseById('space-limb-rise')
   assert.ok(validationCase.path)
   const calls: string[] = []
   const port: WorkbenchPathPort = {
@@ -237,7 +256,7 @@ test('动作路径按声明顺序执行并恢复人工输入', async () => {
 })
 
 test('limb 动作路径中点仍精确相切', async () => {
-  const validationCase = validationCaseById('space-limb')
+  const validationCase = validationCaseById('space-limb-rise')
   assert.ok(validationCase.path)
   const poses: Parameters<WorkbenchPathPort['setCameraPose']>[0][] = []
   const port: WorkbenchPathPort = {
@@ -276,13 +295,21 @@ test('limb 动作路径中点仍精确相切', async () => {
 
 test('验证用例的当地太阳高度、相位与取景范围满足数值定义', () => {
   const localElevationCases = [
-    ['ground-day-sunward', 20],
+    ['ground-day-sunward', 35],
     ['ground-sun-plus-five', 5],
     ['ground-sun-zero', 0],
     ['ground-sun-minus-one', -1],
     ['ground-civil-twilight', -6],
     ['ground-nautical-twilight', -12],
     ['ground-astronomical-twilight', -18],
+    ['high-altitude-day-narrow', 20],
+    [
+      'high-altitude-sunset-narrow',
+      -horizonDipRadians(
+        12,
+        EARTH_ATMOSPHERE.bottomRadiusKm,
+      ) * 180 / Math.PI,
+    ],
     ['lunar-ground-terminator', 0],
     ['lunar-ground-night', -90],
   ] as const
@@ -290,10 +317,7 @@ test('验证用例的当地太阳高度、相位与取景范围满足数值定�
   for (const [id, expectedElevationDegrees] of localElevationCases) {
     const validationCase = validationCaseById(id)
     const controls = createValidationControls(validationCase)
-    const pose = cameraPresetPose(
-      validationCase.cameraPreset,
-      EARTH_ATMOSPHERE.bottomRadiusKm,
-    )
+    const pose = validationCase.cameraPose
     const sunDirection = sunDirectionForControls(controls)
     const localElevationDegrees =
       (Math.asin(dot(sunDirection, normalize(pose.position))) * 180) /
@@ -307,61 +331,93 @@ test('验证用例的当地太阳高度、相位与取景范围满足数值定�
   }
 
   const phaseCases = [
-    ['planetary-day', 0],
-    ['planetary-terminator', 90],
-    ['planetary-crescent', 160],
+    ['planetary-night-side', 145, 25.75],
+    ['planetary-terminator', 90, 24],
+    ['planetary-crescent', 160, 24],
   ] as const
 
-  for (const [id, expectedPhaseDegrees] of phaseCases) {
+  for (const [
+    id,
+    expectedPhaseDegrees,
+    expectedFovDegrees,
+  ] of phaseCases) {
     const validationCase = validationCaseById(id)
     const controls = createValidationControls(validationCase)
-    const pose = cameraPresetPose(
-      validationCase.cameraPreset,
-      EARTH_ATMOSPHERE.bottomRadiusKm,
-    )
+    const pose = validationCase.cameraPose
     const sunDirection = sunDirectionForControls(controls)
     const phaseDegrees =
       (Math.acos(dot(sunDirection, normalize(pose.position))) * 180) /
       Math.PI
 
     close(phaseDegrees, expectedPhaseDegrees, 1e-10)
-    assert.equal(controls.camera.verticalFovDegrees, 24)
+    assert.equal(
+      controls.camera.verticalFovDegrees,
+      expectedFovDegrees,
+    )
   }
 
   for (const id of [
-    'narrow-sunrise',
-    'narrow-sunrise-10',
-    'narrow-sunrise-20',
+    'ground-horizon-sun-fov-5',
+    'ground-horizon-sun-fov-10',
+    'ground-horizon-sun-fov-20',
   ]) {
     const validationCase = validationCaseById(id)
     const controls = createValidationControls(validationCase)
-    const pose = cameraPresetPose(
-      validationCase.cameraPreset,
-      EARTH_ATMOSPHERE.bottomRadiusKm,
-    )
+    const pose = validationCase.cameraPose
     const sunDirection = sunDirectionForControls(controls)
 
     close(dot(sunDirection, pose.forward), 1, 1e-12)
+  }
+
+  {
+    const validationCase =
+      validationCaseById('space-limb-sunrise')
+    const controls = createValidationControls(validationCase)
+    const sunDirection = sunDirectionForControls(controls)
+    close(
+      dot(sunDirection, validationCase.cameraPose.forward),
+      Math.cos(0.35 * Math.PI / 180),
+      1e-12,
+    )
+  }
+
+  for (const [id, expectedFovDegrees] of [
+    ['high-altitude-day-narrow', 15],
+    ['high-altitude-sunset-narrow', 10],
+  ] as const) {
+    const validationCase = validationCaseById(id)
+    const controls = createValidationControls(validationCase)
+    close(
+      length(validationCase.cameraPose.position) -
+        EARTH_ATMOSPHERE.bottomRadiusKm,
+      12,
+      1e-10,
+    )
+    assert.equal(
+      controls.camera.verticalFovDegrees,
+      expectedFovDegrees,
+    )
+    assert.ok(validationCase.reference)
   }
 })
 
 test('月球验证用例由轨道快照精确构建目标画面射线', () => {
   const cases = [
-    ['lunar-ground-terminator', 'surface', 0.08, 0.08],
-    ['lunar-space-limb', 'space-limb', 0, 0.005],
-    ['lunar-ground-night', 'surface', 0, 1],
+    ['lunar-ground-terminator', 0.08, 0.08],
+    ['lunar-space-limb', 0, 0.005],
+    ['lunar-ground-night', 0, 1],
+    ['space-limb-oblique', 0.044, -0.0382],
+    ['planetary-night-side', 0.1358, -0.192],
   ] as const
 
-  for (const [id, presetId, rightOffset, upOffset] of cases) {
-    const controls = createValidationControls(validationCaseById(id))
+  for (const [id, rightOffset, upOffset] of cases) {
+    const validationCase = validationCaseById(id)
+    const controls = createValidationControls(validationCase)
     const snapshot = evaluateCelestialScenario(
       controls.celestial.scenario,
       controls.celestial.simulationTimeSeconds,
     )
-    const pose = cameraPresetPose(
-      presetId,
-      EARTH_ATMOSPHERE.bottomRadiusKm,
-    )
+    const pose = validationCase.cameraPose
     const cameraRight = normalize(cross(pose.forward, pose.up))
     const expectedDirection = normalize(add(
       pose.forward,
@@ -385,16 +441,15 @@ test('月球验证用例由轨道快照精确构建目标画面射线', () => {
   }
 
   assert.ok(
-    moonIlluminatedFraction('lunar-ground-terminator', 'surface') >
-      0.4,
+    moonIlluminatedFraction('lunar-ground-terminator') > 0.4,
   )
   assert.ok(
-    moonIlluminatedFraction('lunar-ground-night', 'surface') > 0.8,
+    moonIlluminatedFraction('lunar-ground-night') > 0.8,
   )
 })
 
 test('动作路径取消后恢复输入且不执行后续检查点', async () => {
-  const validationCase = validationCaseById('space-limb')
+  const validationCase = validationCaseById('space-limb-rise')
   assert.ok(validationCase.path)
   const controller = new AbortController()
   const calls: string[] = []
@@ -445,10 +500,32 @@ test('验证用例 ID 唯一且仅部分用例包含完整参考元数据', () =
       (item) =>
         item.reference !== null &&
         item.reference.src.length > 0 &&
+        Number.isFinite(item.reference.aspectRatio) &&
+        item.reference.aspectRatio > 0 &&
+        (
+          item.reference.fit === 'contain' ||
+          item.reference.fit === 'cover'
+        ) &&
+        item.reference.alignment.length > 0 &&
         item.reference.comparable.length > 0 &&
         item.reference.unknowns.length > 0,
     ),
   )
+})
+
+test('验证用例直接保存有限正交摄像机姿态', () => {
+  for (const validationCase of VALIDATION_CASES) {
+    const pose = validationCase.cameraPose
+
+    assert.ok(
+      [...pose.position, ...pose.forward, ...pose.up].every(
+        (component) => Number.isFinite(component),
+      ),
+    )
+    close(length(pose.forward), 1, 1e-12)
+    close(length(pose.up), 1, 1e-12)
+    close(dot(pose.forward, pose.up), 0, 1e-12)
+  }
 })
 
 test('验证用例目录按分类和分组形成唯一顺序', () => {

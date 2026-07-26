@@ -47,7 +47,15 @@ const activeReference = computed(() =>
 
     <div class="workspace">
       <section class="viewport" aria-label="星球舞台">
-        <div class="canvas-stack">
+        <div
+          class="canvas-stack"
+          :class="{ 'reference-framed': activeReference }"
+          :style="
+            activeReference
+              ? { aspectRatio: String(activeReference.aspectRatio) }
+              : undefined
+          "
+        >
           <canvas
             ref="renderingCanvas"
             class="render-canvas"
@@ -71,6 +79,7 @@ const activeReference = computed(() =>
               :key="activeReference.src"
               :src="activeReference.src"
               :alt="activeReference.label"
+              :style="{ objectFit: activeReference.fit }"
               @load="store.setReferenceLoaded(true)"
               @error="
                 store.setReferenceLoadFailed(
@@ -169,6 +178,11 @@ const activeReference = computed(() =>
   height: 100%;
 }
 
+.canvas-stack.reference-framed {
+  height: auto;
+  max-height: 100%;
+}
+
 .render-canvas,
 .debug-overlay {
   position: absolute;
@@ -198,21 +212,23 @@ const activeReference = computed(() =>
   z-index: 1;
   position: absolute;
   inset: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
   margin: 0;
   pointer-events: none;
   background: #000;
 }
 
 .reference-overlay img {
+  display: block;
   width: 100%;
   height: 100%;
-  min-height: 0;
   object-fit: contain;
 }
 
 .reference-overlay figcaption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   padding: 6px 8px;
   color: #fff;
   background: rgb(0 0 0 / 70%);
@@ -241,6 +257,11 @@ const activeReference = computed(() =>
   .canvas-stack {
     height: 58vh;
     min-height: 320px;
+  }
+
+  .canvas-stack.reference-framed {
+    height: auto;
+    min-height: 0;
   }
 
   .workspace :deep(.atmosphere-panel) {

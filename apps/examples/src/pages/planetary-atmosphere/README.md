@@ -25,7 +25,7 @@ pnpm --filter examples test
 - Free 模式的摄像机面板可编辑世界位置与相对 Body 的“偏航角/俯仰角”。编辑使用独立草稿和显式应用命令，不把低频 telemetry 双向绑定成控制真相；位置必须位于最低高度球面之外，偏航角限制为 ±180°、俯仰角限制为 ±89°。最终 View forward、Body right/forward/up 和 Look 角继续由场景 telemetry 发布到诊断面板；Orbit 不存在 Body/Look 时对应字段显示 `—`，且禁用这些 Free 编辑命令。
 - 预设不会切换控制模式。地表预设高度为 `0.0015 km`（1.5 m）；地表、20 km 和 limb 预设按球面半径精确指向可见地平线，低轨和深空预设朝向行星中心。
 - “验证用例”按“观察尺度 / 专项诊断 → 分组 → 用例”展示，并使用 `/planetary-atmosphere/presets/:caseId` 深链接。点击按钮、直接访问、刷新和浏览器前进后退都由同一路由入口激活完整场景；离开“预设”标签页后取消激活，但不擅自恢复页面参数。
-- 自动化可直接访问稳定用例 URL，例如 `/planetary-atmosphere/presets/ground-civil-twilight`、`/planetary-atmosphere/presets/space-limb` 或 `/planetary-atmosphere/presets/ground-terminator-reference`，再通过 `window.atmosphereWorkbench.getSnapshot()` 获取完整上下文。
+- 自动化可直接访问稳定用例 URL，例如 `/planetary-atmosphere/presets/ground-civil-twilight`、`/planetary-atmosphere/presets/space-limb-day-side` 或 `/planetary-atmosphere/presets/ground-terminator-reference`，再通过 `window.atmosphereWorkbench.getSnapshot()` 获取完整上下文。
 - 月球专项用例包括 `/planetary-atmosphere/presets/lunar-ground-terminator`、`/planetary-atmosphere/presets/lunar-space-limb` 和 `/planetary-atmosphere/presets/lunar-ground-night`。月球位置由目标相机射线与真实轨道球求交后反解为轨道初相，不使用屏幕贴片或验证专属世界位置。
 - 参考图是可选用例数据，默认不显示，混合比例默认 `0.5`；两项设置不随用例切换而变化，并通过 `reference=0|1`、`mix=0..1` 查询参数复现。图片保持原始宽高比，只比较用例注明的自然层次，不用于逐像素拟合。
 - `地表晨昏线 60°` 提供 Production、Reference、Aerial L 串行对照路径；`太空大气边缘` 提供从 400 km 到 800 km 的确定性 limb 移动路径，每帧按当前高度重新构建切线姿态。路径执行期间禁用冲突的人工相机输入。

@@ -258,7 +258,7 @@ export function useAtmosphereScene(
       store.replaceControls(controls)
       activeScene.setCameraMode(controls.camera.mode)
       activeScene.setVerticalFov(controls.camera.verticalFovDegrees)
-      activeScene.applyCameraPreset(validationCase.cameraPreset)
+      activeScene.setCameraPose(validationCase.cameraPose)
       store.completeValidationCaseActivation(id)
     } catch (error) {
       store.replaceControls(previousControls)
